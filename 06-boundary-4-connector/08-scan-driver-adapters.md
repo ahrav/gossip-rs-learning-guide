@@ -19,15 +19,14 @@ assignments without knowing which engine runs behind the trait.*
 
 ## Why Scan-Driver Adapters Exist
 
-The connector enumeration and read methods from Chapters 1-3
-define a page-by-page enumeration model: enumerate items, advance the cursor,
-read content. This model is clean for contract definition and conformance
-testing, but production scan engines operate at a higher level of
-abstraction. A filesystem scanner spawns parallel workers across directory
-trees. A git scanner walks commit graphs and ref hierarchies. These engines
-need more than page-by-page cursor advancement -- they need cancellation
-tokens, commit sinks for finding persistence, and event output channels for
-progress reporting.
+The connector capability, split-point, and read methods from Chapters 1-3
+define a per-item access model: query capabilities, suggest split points,
+open and read content. This model is clean for contract definition, but
+production scan engines operate at a higher level of abstraction. A
+filesystem scanner spawns parallel workers across directory trees. A git
+scanner walks commit graphs and ref hierarchies. These engines need more
+than per-item method calls -- they need cancellation tokens, commit sinks
+for finding persistence, and event output channels for progress reporting.
 
 The `gossip_scan_driver` crate defines two traits for this higher-level model:
 
@@ -452,27 +451,26 @@ completing and causing the scoped thread join to deadlock.
 
 ---
 
-## How the Adapters Relate to the Connector Traits
+## How the Adapters Relate to the Connector Methods
 
 The adapter layer does not replace the connector API -- it builds on
-it. The connector enumeration and read methods define the
-contract vocabulary: what a page looks like, how cursors progress, what
-errors mean. The `ScanDriver` adapters consume this vocabulary while
+it. The connector capability and read methods define the
+contract vocabulary: what capabilities exist, how split points are chosen,
+what errors mean. The `ScanDriver` adapters consume this vocabulary while
 providing a higher-level execution interface:
 
 | Concern | Connector Methods | ScanDriver Adapters |
 |---------|-----------------|---------------------|
-| Page enumeration | `enumerate_page` returns one page | `run` processes all items in one call |
+| Planning | `caps` / `choose_split_point` | `capabilities` declaration |
 | Content access | `open` / `read_range` per item | Engine handles reads internally |
 | Error handling | `EnumerateError` / `ReadError` | `anyhow::Result` wrapping engine errors |
 | Cancellation | Not modeled | `CancellationToken` parameter |
 | Finding persistence | Not modeled | `CommitSink` parameter |
 | Progress reporting | Not modeled | `EventOutput` parameter |
 
-The connector methods remain the right abstraction for conformance testing
-(Chapter 8), page validation (Chapter 4), and any component that needs to
-reason about individual enumeration pages. The scan-driver adapters are the
-right abstraction for production orchestration that dispatches heterogeneous
+The connector methods remain the right abstraction for split-point queries
+and per-item content access. The scan-driver adapters are the right
+abstraction for production orchestration that dispatches heterogeneous
 assignments across a worker pool.
 
 ---

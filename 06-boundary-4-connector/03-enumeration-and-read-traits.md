@@ -1,4 +1,4 @@
-# The Shared Connector Surface -- Enumeration and Read Methods
+# The Shared Connector Surface -- Split, Read, and Capability Methods
 
 *A GitHub connector encounters a 401 Unauthorized response from the GitHub
 API. The connector author classifies the error as `ErrorClass::Retryable` --
@@ -10,10 +10,10 @@ Attempt 1. Attempt 2. Each attempt consumes one request against GitHub's
 nearly 1% of the hourly budget on a request that will never succeed. By
 attempt 100, the scan loop exhausts its transient-retry budget and finally
 parks the shard. But the damage is done: every other connector instance
-sharing the same GitHub App installation is now throttled. Shard enumeration
-across 340 repositories stalls for 38 minutes while the rate-limit window
-resets. A single miscategorized error -- `Retryable` instead of `Permanent`
--- cascades into a full-source outage.*
+sharing the same GitHub App installation is now throttled. Scanning across
+340 repositories stalls for 38 minutes while the rate-limit window resets.
+A single miscategorized error -- `Retryable` instead of `Permanent` --
+cascades into a full-source outage.*
 
 ---
 
@@ -28,28 +28,28 @@ explicitly at error-construction time, with no escape hatch for ambiguity.
 The `gossip-contracts::connector::api` module defines the error taxonomy
 (`ErrorClass`, `EnumerateError`, `ReadError`) and the capability declaration
 struct (`ConnectorCapabilities`) that underpin this contract. Every connector
-is expected to provide the same five inherent methods -- `caps()`,
-`enumerate_page()`, `choose_split_point()`, `open()`, `read_range()` -- that
-form a shared surface for enumeration and content access.
+is expected to provide the same four inherent methods -- `caps()`,
+`choose_split_point()`, `open()`, `read_range()` -- that form a shared
+surface for split-point selection and content access.
 
-Chapter 2 defined the value types (`ScanItem`, `EnumerationPage`, `Budgets`,
-`Cursor`) that flow through these methods. This chapter defines the methods
-themselves and the error and capability types that govern their behavior.
+Chapter 2 defined the value types (`ScanItem`, `Budgets`, `Cursor`) that
+flow through these methods. This chapter defines the methods themselves and
+the error and capability types that govern their behavior.
 
 ---
 
-## The Five-Method Convention
+## The Four-Method Convention
 
 Every connector struct exposes the same set of inherent methods. These are
 not formalized as a trait; each connector is a concrete type. Polymorphism
 lives at the `ScanSourceFactory` / `ScanDriver` layer (covered in Chapter
-10), where the runtime selects the appropriate factory based on the scan
+8), where the runtime selects the appropriate factory based on the scan
 assignment's `ConnectorKind`.
 
-The shared surface consists of two groups: **enumeration methods** that
-traverse metadata and **read methods** that access item content.
+The shared surface consists of two groups: **planning methods** that support
+shard management and **read methods** that access item content.
 
-### Enumeration Methods
+### Planning Methods
 
 ```rust
 // From InMemoryDeterministicConnector (identical signatures on FilesystemConnector)
@@ -61,15 +61,6 @@ pub fn caps(&self) -> ConnectorCapabilities {
         range_read: true,
         split_hints: true,
     }
-}
-
-pub fn enumerate_page(
-    &mut self,
-    shard: &ShardSpec,
-    cursor: &Cursor,
-    budgets: Budgets,
-) -> Result<EnumerationPage, EnumerateError> {
-    // ...
 }
 
 pub fn choose_split_point(
@@ -84,15 +75,8 @@ pub fn choose_split_point(
 
 - **`caps(&self) -> ConnectorCapabilities`** -- Returns the static feature
   profile. Takes `&self` (not `&mut self`) because capability queries must
-  not mutate connector state. Called during planning, before any enumeration
+  not mutate connector state. Called during planning, before any scanning
   begins.
-
-- **`enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`**
-  -- The core operation. Takes a `ShardSpec` (the key range to enumerate), a
-  `Cursor` (the resumption point), and `Budgets` (advisory limits). Returns
-  an `EnumerationPage` containing items and a continuation cursor, or an
-  `EnumerateError`. The `&mut self` receiver allows connectors to maintain
-  internal state (connection pools, pagination tokens, rate-limit trackers).
 
 - **`choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`**
   -- An optional method for connectors that can suggest natural partition
@@ -158,7 +142,7 @@ Each factory validates the assignment's `ConnectorKind`, constructs the
 appropriate concrete connector internally, and returns a `Box<dyn
 ScanDriver>`. The `ScanDriver::run` method receives the scanner engine,
 execution config, event output sink, commit sink, and cancellation token --
-a richer interface than a page-by-page enumeration model could express.
+a richer interface than a method-by-method delegation model could express.
 
 The three factories are:
 
@@ -169,7 +153,7 @@ The three factories are:
 - **`InMemoryScanSourceFactory`** -- Bridges in-memory test datasets to a
   sequential commit-sink lifecycle driver.
 
-The shared five-method convention is a structural pattern, not a compiler-
+The shared four-method convention is a structural pattern, not a compiler-
 enforced contract. Connector authors follow it by convention; the
 `ScanSourceFactory` adapter layer is the point where the compiler enforces
 type correctness.
@@ -614,7 +598,7 @@ fn default_caps_are_conservative() {
 
 ## The Execution Path: ScanSourceFactory and ScanDriver
 
-The five inherent methods on each connector are not called directly by the
+The four inherent methods on each connector are not called directly by the
 scan orchestration layer. The execution path goes through `ScanSourceFactory`
 and `ScanDriver`, both defined in the `gossip-scan-driver` crate.
 
@@ -635,14 +619,14 @@ Each factory implementation validates the assignment's `ConnectorKind`,
 constructs the appropriate concrete connector, and returns a `Box<dyn
 ScanDriver>` that encapsulates the full scan lifecycle. The `ScanDriver`
 receives the scanner engine, execution config, event output sink, commit
-sink, and cancellation token -- a richer interface than a page-by-page
-enumeration model could express.
+sink, and cancellation token -- a richer interface than direct method
+delegation could express.
 
-The concrete connector's `enumerate_page()`, `open()`, `read_range()`, and
-other methods are called internally by the `ScanDriver` implementation.
-Callers of `ScanDriver::run` never interact with the connector directly.
-This layering means the connector surface can remain a structural convention
-(inherent methods with matching signatures) while the `ScanSourceFactory` /
+The concrete connector's `open()`, `read_range()`, and other methods are
+called internally by the `ScanDriver` implementation. Callers of
+`ScanDriver::run` never interact with the connector directly. This layering
+means the connector surface can remain a structural convention (inherent
+methods with matching signatures) while the `ScanSourceFactory` /
 `ScanDriver` layer provides the compiler-enforced polymorphism boundary.
 
 ---
@@ -654,14 +638,14 @@ implementations and the scan pipeline. `ErrorClass` forces a binary retry
 decision at error construction time, eliminating the ambiguity that caused
 the opening failure. `EnumerateError` and `ReadError` are structurally
 identical but nominally distinct, preventing accidental cross-assignment
-between the enumeration and read paths. `ConnectorCapabilities` advertises
+between the planning and read paths. `ConnectorCapabilities` advertises
 connector features through four boolean flags with conservative defaults.
-Every connector provides the same five inherent methods -- `caps()`,
-`enumerate_page()`, `choose_split_point()`, `open()`, `read_range()` --
-following a shared convention. Polymorphism lives at the `ScanSourceFactory`
-/ `ScanDriver` layer, where the runtime selects the appropriate factory
-based on `ConnectorKind` and the compiler enforces type correctness through
-the `ScanDriver` trait.
+Every connector provides the same four inherent methods -- `caps()`,
+`choose_split_point()`, `open()`, `read_range()` -- following a shared
+convention. Polymorphism lives at the `ScanSourceFactory` / `ScanDriver`
+layer, where the runtime selects the appropriate factory based on
+`ConnectorKind` and the compiler enforces type correctness through the
+`ScanDriver` trait.
 
-Chapter 4 introduces the page validator that checks the structural
-correctness of every page these methods produce.
+Chapter 4 examines the circuit breaker design specification that governs
+how error classification feeds into shard lifecycle decisions.

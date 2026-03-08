@@ -72,32 +72,32 @@ let result = coordinator.acquire_and_restore_into(
 - Fencing token enables idempotency checks
 - Lease expiry prevents stuck shards
 
-### Step 3: Worker Enumerates Items (Boundary 4)
+### Step 3: Worker Scans Items (Boundary 4)
 
 ```rust
-// Worker uses connector (B4) to enumerate items
-let page = connector.enumerate(
-    session.shard_range,  // From B3
-    cursor,               // None for first page
-    page_size,
-)?;
+// Worker uses ScanDriver (B4) to scan items
+// The ScanSourceFactory selects the right driver for the assignment
+let factory = select_factory(assignment.connector_kind);
+let driver = factory.driver_for_assignment(&assignment)?;
 
-// Page contains:
-// - Vec<ItemKey> (from B1)
-// - next_cursor: Option<Cursor>
-// - is_last_page: bool
+// Driver runs the full scan in one call:
+// - Enumerates items within shard range (from B3)
+// - Opens and reads content via connector methods
+// - Feeds content to scanner engine for detection
+// - Commits findings through CommitSink protocol
+let report = driver.run(engine, config, events, commits, cancel)?;
 ```
 
 **Boundary 4 responsibilities**:
-- Query source API within shard range
+- Query source within shard range
 - Construct ItemKey for each resource (from B1)
-- Generate cursor for next page
-- Handle rate limits, retries, circuit breakers
+- Open and read item content
+- Handle rate limits, retries
 
 **Guarantees**:
-- Items are returned in cursor order
-- Cursor is opaque but deterministic
-- Circuit breaker prevents thundering herd on source errors
+- Items are scanned within shard range bounds
+- ScanDriver handles cursor progression internally
+- Error classification determines retry vs park decisions
 
 ### Step 4: Derive StableItemId (Boundary 1)
 
@@ -459,7 +459,7 @@ sequenceDiagram
 |------|----------|-------|--------|-----------|
 | 1 | B2 | RunManifest | RunId, ShardRecords | Durable manifest |
 | 2 | B2 | WorkerId, RunId | AcquireResultView, FenceEpoch | Exclusive lease |
-| 3 | B4 | ShardRange, Cursor | Page of ItemKeys | Ordered enumeration |
+| 3 | B4 | ShardRange, Assignment | ScanReport | Scanned items within shard |
 | 4 | B1 | ItemKey, Connector | StableItemId | Cross-run stability (tenant-independent) |
 | 5 | B5 | ItemKey | CommitSink begin/finish | Exactly-once |
 | 6 | B4+B1 | ItemKey | Content, NormHash | Deterministic hash |

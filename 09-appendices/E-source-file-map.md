@@ -122,19 +122,15 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 
 ### Connector Contracts (Boundary 4)
 
-`crates/gossip-contracts/src/connector/` (9 files)
+`crates/gossip-contracts/src/connector/` (5 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
-| `crates/gossip-contracts/src/connector/mod.rs` | 06-01, 06-05 | Module structure, public API, re-exports, circuit breaker contract |
+| `crates/gossip-contracts/src/connector/mod.rs` | 06-01 | Module structure, public API, re-exports |
 | `crates/gossip-contracts/src/connector/api.rs` | 06-03 | Error taxonomy, capability negotiation |
 | `crates/gossip-contracts/src/connector/api_tests.rs` | 06-03 | Connector API tests |
 | `crates/gossip-contracts/src/connector/types.rs` | 06-01, 06-02 | ScanItem, ItemRef, Budgets, ConnectorCapabilities, ErrorClass, ItemKey, TokenBytes |
 | `crates/gossip-contracts/src/connector/types_tests.rs` | 06-01, 06-02 | Connector type tests |
-| `crates/gossip-contracts/src/connector/page_validator.rs` | 06-04 | Page validation logic, PageValidationError |
-| `crates/gossip-contracts/src/connector/page_validator_tests.rs` | 06-04 | Page validator tests |
-| `crates/gossip-contracts/src/connector/conformance.rs` | 06-08 | Connector conformance test suite |
-| `crates/gossip-contracts/src/connector/conformance_tests.rs` | 06-08 | Conformance test execution |
 
 ### Persistence Contracts (Boundary 5)
 
@@ -576,35 +572,31 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - **06-02: Toxic Byte Value Wrappers**
   - `crates/gossip-contracts/src/connector/types.rs` (ItemKey, ItemRef, TokenBytes value wrappers)
 
-- **06-03: Enumeration and Read Traits**
+- **06-03: Split, Read, and Capability Methods**
   - `crates/gossip-contracts/src/connector/api.rs` (Error taxonomy (ErrorClass, EnumerateError, ReadError) and capability negotiation (ConnectorCapabilities))
   - `crates/gossip-contracts/src/connector/api_tests.rs` (Connector API tests)
 
-- **06-04: Page Validation**
-  - `crates/gossip-contracts/src/connector/page_validator.rs` (Page validation logic, PageValidationError)
-  - `crates/gossip-contracts/src/connector/page_validator_tests.rs` (Page validator tests)
-
-- **06-05: Circuit Breaker Design**
+- **06-04: Circuit Breaker Design**
   - `crates/gossip-contracts/src/connector/mod.rs` (circuit breaker contract)
   - `diagrams/09-circuit-breaker.md` (circuit breaker diagram)
 
-- **06-06: In-Memory Deterministic Connector**
+- **06-05: In-Memory Deterministic Connector**
   - `crates/gossip-connectors/src/in_memory.rs` (InMemoryConnector for testing)
   - `crates/gossip-connectors/src/in_memory_tests.rs` (In-memory connector tests)
 
-- **06-07: Filesystem and Git Connectors**
+- **06-06: Filesystem Connector**
   - `crates/gossip-connectors/src/filesystem.rs` (FilesystemConnector)
   - `crates/gossip-connectors/src/filesystem_tests.rs` (FilesystemConnector tests)
-  - `crates/gossip-connectors/src/git.rs` (Git connector)
-  - `crates/gossip-connectors/src/git_tests.rs` (Git connector tests)
-  - `crates/gossip-connectors/src/scan_driver.rs` (ScanDriver bridge)
   - `crates/gossip-connectors/src/split_estimator.rs` (Split estimator)
   - `crates/gossip-connectors/src/split_estimator_tests.rs` (Split estimator tests)
   - `crates/gossip-connectors/src/common.rs` (Shared connector utilities)
 
-- **06-08: Conformance Harness**
-  - `crates/gossip-contracts/src/connector/conformance.rs` (Connector conformance test suite)
-  - `crates/gossip-contracts/src/connector/conformance_tests.rs` (Conformance test execution)
+- **06-07: Git Connector**
+  - `crates/gossip-connectors/src/git.rs` (Git connector)
+  - `crates/gossip-connectors/src/git_tests.rs` (Git connector tests)
+
+- **06-08: Scan-Driver Adapters**
+  - `crates/gossip-connectors/src/scan_driver.rs` (ScanDriver bridge)
 
 ### Chapter 07: Boundary 5 -- Persistence (5 files)
 
@@ -823,25 +815,19 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - Toxic wrappers: Chapter 06-02 (Toxic Byte Value Wrappers)
 
 **`crates/gossip-contracts/src/connector/api.rs`**:
-- Traits: Chapter 06-03 (Enumeration and Read Traits)
-
-**`crates/gossip-contracts/src/connector/page_validator.rs`**:
-- Validation: Chapter 06-04 (Page Validation)
-
-**`crates/gossip-contracts/src/connector/conformance.rs`**:
-- Conformance: Chapter 06-08 (Conformance Harness)
+- Error taxonomy and capabilities: Chapter 06-03 (Split, Read, and Capability Methods)
 
 **`crates/gossip-connectors/src/in_memory.rs`**:
-- Overview: Chapter 06-06 (In-Memory Deterministic Connector)
+- Overview: Chapter 06-05 (In-Memory Deterministic Connector)
 
 **`crates/gossip-connectors/src/filesystem.rs`**:
-- Overview: Chapter 06-07 (Filesystem Connector)
+- Overview: Chapter 06-06 (Filesystem Connector)
 
 **`crates/gossip-connectors/src/git.rs`**:
 - Overview: Chapter 06-07 (Git Connector)
 
 **`crates/gossip-connectors/src/scan_driver.rs`**:
-- Overview: Chapter 06-07 (ScanDriver bridge)
+- Overview: Chapter 06-08 (Scan-Driver Adapters)
 
 **`crates/gossip-contracts/src/persistence/mod.rs`**:
 - Overview: Chapter 07-01 (Persistence Problem Space)

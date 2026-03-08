@@ -18,7 +18,7 @@ from becoming the breach vector.*
 
 ## Why a Git Connector Exists
 
-The filesystem connector from Chapter 7 indexes all regular files under a
+The filesystem connector from Chapter 6 indexes all regular files under a
 directory root. But a Git repository is not merely a directory of files --
 it has a tracked-file manifest maintained by `git ls-files`. Scanning
 untracked files (build artifacts, IDE caches, `.git` internal objects)
@@ -280,28 +280,14 @@ zero -- still unique per `(path, size)` but with reduced change sensitivity.
 
 ---
 
-## Enumeration: `enumerate_page_bounds`
+## How Scanning is Driven
 
-The enumeration method follows the shared pagination pattern from `common.rs`:
-
-1. **Ensure indexed.** `self.ensure_indexed(budgets.deadline())?` triggers
-   the git snapshot on first call.
-2. **Resolve bounds.** `common::resolve_page_bounds` maps key boundaries to
-   index positions via binary search and checks the deadline.
-3. **Cursor-based resume.** `common::key_resume_start` computes the first
-   index strictly greater than the cursor's `last_key`. When tokens are
-   enabled, the connector performs an O(1) fast-path check: if the entry at
-   `token_idx - 1` matches the cursor's last key, the token index is used
-   directly. If the token is missing, malformed, or disagrees, the
-   binary-search result is used instead.
-4. **Pooled page assembly.** Items are assembled via
-   `common::assemble_pooled_page_shared_key_ref`, which stages each entry's
-   key bytes once into a page-local `ByteSlab` and materializes both
-   `ItemKey` and `ItemRef` from the same slot (since key == ref for this
-   connector).
-5. **Cursor construction.** `common::build_next_cursor_from_staged` builds
-   the continuation cursor with the last emitted key and (when tokens are
-   enabled) a big-endian index token.
+The git connector does not expose a page-by-page enumeration method to
+external callers. Instead, scanning is orchestrated through the
+`GitScanSourceFactory` (covered in Chapter 8), which constructs a
+`GitScanDriver` that delegates to `run_git_scan` from the scanner-git crate.
+The lazy indexing, shard-bound resolution, and split estimation described
+above are used internally by the driver and the connector's read methods.
 
 ---
 
@@ -379,9 +365,8 @@ canonicalize-and-contain (resolved path must start with the canonical repo
 root), and symlink rejection (`symlink_metadata`). The connector tag
 `"gitlocal"` domain-separates identity from other connector types. Weak
 versioning from `(path, size, mtime)` provides change detection without
-content hashing. The shared-slot pooled page assembly path avoids per-item
-heap allocation during enumeration. Read-time containment re-canonicalizes
+content hashing. Read-time containment re-canonicalizes
 paths before every open to catch symlink escapes created after indexing.
 
-Chapter 10 covers the scan-driver adapter factories that bridge these
-connectors to the new `ScanDriver` execution model.
+Chapter 8 covers the scan-driver adapter factories that bridge these
+connectors to the `ScanDriver` execution model.

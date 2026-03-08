@@ -45,8 +45,8 @@ provide domain-separated identity. Those identity types flow through the
 connector boundary -- connectors produce `StableItemId` values that
 downstream components consume without knowing whether the ID came from S3 or
 GitHub. The connector contract layer builds on that foundation by defining
-what connectors produce (enumeration pages, item references, cursors) and
-what they consume (shard specs, budgets, resume cursors).
+what connectors produce (item references, cursors, split hints) and what
+they consume (shard specs, budgets, resume cursors).
 
 ---
 
@@ -87,14 +87,6 @@ Three methods define the enumeration surface:
   intent, not runtime guarantees -- callers must still handle errors from
   operations that the connector claims to support.
 
-- **`pub fn enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`** --
-  The core listing operation. It takes a `ShardSpec` (the key range to
-  enumerate within), a `Cursor` (where to resume), and `Budgets` (stop
-  conditions). The `ShardSpec` from Boundary 3 defines the key range each
-  connector enumerates within. Budget enforcement is explicitly advisory at
-  this layer: the runtime wraps connectors in enforcement adapters rather than
-  trusting implementations.
-
 - **`pub fn choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`** --
   An optional hook for connectors that know where natural partition boundaries
   exist (Git tree boundaries, S3 common prefixes). Connectors without
@@ -118,18 +110,15 @@ Two methods define the read surface:
 
 ---
 
-## The Four-Layer Architecture
+## The Two-Layer Architecture
 
-The connector module is split into four focused layers, each with a distinct
-responsibility. The module-level documentation in `mod.rs` names them
-explicitly.
+The connector module is split into two focused layers, each with a distinct
+responsibility.
 
 Here is the module structure from `mod.rs`:
 
 ```rust
 mod api;
-pub mod conformance;
-pub mod page_validator;
 mod types;
 ```
 
@@ -139,8 +128,8 @@ The layers build on each other in a strict dependency order:
   Layer 1: types.rs
   +-------------------------------------------------+
   | Validated value wrappers (ItemKey, ItemRef,      |
-  | TokenBytes), Cursor, ScanItem, EnumerationPage,  |
-  | Budgets, ConnectorInputError                     |
+  | TokenBytes), Cursor, ScanItem, Budgets,          |
+  | ConnectorInputError                              |
   +-------------------------------------------------+
                           |
                           v
@@ -148,20 +137,6 @@ The layers build on each other in a strict dependency order:
   +-------------------------------------------------+
   | ErrorClass, EnumerateError, ReadError,            |
   | ConnectorCapabilities                             |
-  +-------------------------------------------------+
-                          |
-                          v
-  Layer 3: page_validator.rs
-  +-------------------------------------------------+
-  | PageValidationError, PageValidationViolation,     |
-  | validate_page, validate_page_range               |
-  +-------------------------------------------------+
-                          |
-                          v
-  Layer 4: conformance.rs
-  +-------------------------------------------------+
-  | ConformanceConfig, EnumerationTrace,              |
-  | ItemObservation, ConformanceError                 |
   +-------------------------------------------------+
 ```
 
@@ -174,26 +149,15 @@ layer has no knowledge of traits or operations.
 capabilities. It imports value types from Layer 1 and defines the error types
 (`EnumerateError`, `ReadError`) that model operation outcomes, plus the
 capability struct (`ConnectorCapabilities`) that advertises connector
-features. Concrete connector types provide `caps`, `enumerate_page`,
-`choose_split_point`, `open`, and `read_range` as inherent methods using
-these types. This layer knows about `ShardSpec` from Boundary 2's
-coordination module but does not depend on any runtime connector.
+features. Concrete connector types provide `caps`, `choose_split_point`,
+`open`, and `read_range` as inherent methods using these types. This layer
+knows about `ShardSpec` from Boundary 2's coordination module but does not
+depend on any runtime connector.
 
-**Layer 3 (page_validator)** defines page-level diagnostic types and
-validation functions. It checks that connector-produced pages satisfy
-ordering, range-membership, cursor-monotonicity, and progression invariants.
-The validator uses types from Layers 1 and 2 but adds no new traits.
-
-**Layer 4 (conformance)** defines a test harness that validates connector
-behavior end-to-end. It performs baseline enumeration, determinism checks,
-resume-point verification, and secret scanning. This layer builds on all
-three lower layers and is typically used in integration tests and bring-up
-workflows.
-
-The `mod.rs` re-exports flatten all four layers into a single import
-boundary. Runtime crates import from `gossip_contracts::connector` and
-receive types from all layers without needing to know which internal module
-defines each type.
+The `mod.rs` re-exports flatten both layers into a single import boundary.
+Runtime crates import from `gossip_contracts::connector` and receive types
+from both layers without needing to know which internal module defines each
+type.
 
 ---
 
@@ -205,15 +169,13 @@ from becoming a catch-all.
 
 **What connectors own:**
 
-- Value types for enumeration data (`ItemKey`, `ItemRef`, `TokenBytes`,
-  `Cursor`, `ScanItem`, `EnumerationPage`).
-- API vocabulary for listing and reading (`ConnectorCapabilities`,
+- Value types for scan data (`ItemKey`, `ItemRef`, `TokenBytes`,
+  `Cursor`, `ScanItem`).
+- API vocabulary for split-point selection and reading (`ConnectorCapabilities`,
   `EnumerateError`, `ReadError`).
 - Error classification for operation outcomes (`ErrorClass`,
   `EnumerateError`, `ReadError`).
 - Capability negotiation (`ConnectorCapabilities`).
-- Page-level validation diagnostics (`PageValidationError`, `validate_page`).
-- Conformance testing vocabulary (`ConformanceConfig`, `ConformanceError`).
 
 **What connectors do not own:**
 
@@ -282,8 +244,6 @@ The dependency direction is strict and uni-directional:
   +------------------------------------------+
   | connector::types     (value wrappers)     |
   | connector::api       (error & capability types)|
-  | connector::page_validator (diagnostics)   |
-  | connector::conformance (test harness)     |
   | coordination::*      (shard, cursor, ...)  |
   | identity::*          (StableItemId, ...)   |
   +------------------------------------------+
@@ -309,7 +269,7 @@ The `api.rs` module makes this dependency explicit in its imports:
 ```rust
 use crate::coordination::ShardSpec;
 
-use super::{Budgets, Cursor, EnumerationPage, ItemKey, ItemRef};
+use super::{Budgets, Cursor, ItemKey, ItemRef};
 ```
 
 `ShardSpec` comes from the coordination module. Everything else comes from
@@ -457,14 +417,13 @@ opts in to features; it never needs to opt out.
 
 The connector contract layer in `gossip-contracts::connector` provides a
 uniform interface over heterogeneous data sources. Two method groups --
-enumeration (`caps`, `enumerate_page`, `choose_split_point`) for listing and
+planning (`caps`, `choose_split_point`) for shard management and
 read (`open`, `read_range`) for content access -- model operations with
 independent scaling and failure characteristics. Concrete connector types
 provide these as inherent methods; polymorphism lives at the
-`ScanSourceFactory`/`ScanDriver` layer. Four internal layers (types, api,
-page_validator, conformance) separate value validation from API vocabulary
-from page diagnostics from end-to-end harness testing. The toxic-byte
-principle ensures that `Debug` and `Display` never emit raw connector bytes,
+`ScanSourceFactory`/`ScanDriver` layer. Two internal layers (types, api)
+separate value validation from API vocabulary. The toxic-byte principle
+ensures that `Debug` and `Display` never emit raw connector bytes,
 preventing accidental secret leakage into logs. Error classification splits
 cleanly into input validation (`ConnectorInputError`) and operation outcomes
 (`EnumerateError`, `ReadError`), with a binary `ErrorClass` that
@@ -473,6 +432,6 @@ orchestration uses for retry decisions. Capability negotiation via
 conservative default.
 
 Chapter 2 examines each toxic-byte wrapper in detail -- `ItemKey`, `ItemRef`,
-`TokenBytes`, `Cursor`, `ScanItem`, `EnumerationPage`, `Budgets`, and
-`VersionId` -- showing how the `define_toxic_bytes!` macro generates them and
-how named constructors make invalid states unrepresentable.
+`TokenBytes`, `Cursor`, `ScanItem`, `Budgets`, and `VersionId` -- showing
+how the `define_toxic_bytes!` macro generates them and how named constructors
+make invalid states unrepresentable.

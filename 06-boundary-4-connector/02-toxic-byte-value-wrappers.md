@@ -1,10 +1,12 @@
 # "Redacted at the Boundary" -- Toxic-Byte Value Wrappers
 
-*A connector enumerates an S3 bucket and returns an `EnumerationPage` with
-200 items. The last item has key `s3://prod-bucket/config/secrets.yaml`.
-The connector builds a `Cursor` with `token = Some(b"eyJjb250aW51YXRpb...")`
+*A connector is configured for an S3 bucket. An `ItemRef` in the scan pipeline
+encodes the object's ARN and access key ID -- the connector needs both to
+construct a pre-signed URL for the read path. During development, someone
+auto-derives `Debug` on the struct wrapping the raw bytes. A `Cursor` is
+built with `token = Some(b"eyJjb250aW51YXRpb...")`
 -- the S3 continuation token -- but accidentally passes `None` for `last_key`.
-The coordinator stores the cursor opaquely. Enumeration proceeds to the next
+The coordinator stores the cursor opaquely. Scanning proceeds to the next
 shard. Two hours later, the coordinator restarts from a checkpoint. It loads
 the cursor: token `eyJjb250aW51YXRpb...` is present, but `last_key` is
 `None`. The connector receives the cursor on resume. It has a token, but no
@@ -846,53 +848,6 @@ Here is the definition from `types.rs`:
 
 ---
 
-## `EnumerationPage` -- Page of Items Plus Continuation
-
-An enumeration page pairs a vector of scan items with the cursor for the
-next request.
-
-Here is the definition from `types.rs`:
-
-```rust
-/// A connector enumeration page and continuation cursor.
-///
-/// ## Empty-page semantics
-///
-/// An empty `items` slice is valid and its meaning depends on the cursor:
-///
-/// - Empty items + [`Cursor::initial()`] → scan is complete (no more data).
-/// - Empty items + non-initial cursor → no results in the current range,
-///   but more data may exist beyond the cursor position.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnumerationPage {
-    items: Vec<ScanItem>,
-    next_cursor: Cursor,
-}
-```
-
-Two fields:
-
-- **`items: Vec<ScanItem>`** -- The scan results for the current page. An
-  empty vector is valid; the semantics depend on `next_cursor`.
-- **`next_cursor: Cursor`** -- Where to resume on the next request. An
-  initial cursor with empty items means the scan is complete. A non-initial
-  cursor with empty items means the connector found no results in the current
-  range but more data may exist.
-
-The `into_parts` and `into_next_cursor` destructuring methods allow consumers
-to take ownership of the cursor without cloning:
-
-Here is the definition from `types.rs`:
-
-```rust
-    #[must_use]
-    pub fn into_next_cursor(self) -> Cursor {
-        self.next_cursor
-    }
-```
-
----
-
 ## `Budgets` -- Making Zero Budgets Unrepresentable
 
 The `Budgets` type carries scan-level stop conditions. Its design uses
@@ -1045,17 +1000,16 @@ an enum with `Owned(Box<[u8]>)` and `Pooled(PooledToxicBytes)` variants.
 `PartialEq`, `Eq`, and `Hash` are implemented manually (not derived) to
 compare by byte content regardless of storage variant. The `try_from_slot`
 constructor creates pooled wrappers backed by a page-local `ByteSlab` for
-zero-alloc HOT-path page emission via `PooledByteSlab`. `Cursor` uses
+zero-alloc HOT-path emission via `PooledByteSlab`. `Cursor` uses
 named constructors to make the token-without-key state unrepresentable.
 `ScanItem` bundles required identity fields with optional metadata via a
-builder pattern. `EnumerationPage` pairs items with a continuation cursor
-that encodes empty-page semantics through its cursor state. `Budgets` uses
-`NonZeroUsize` and `NonZeroU64` to prevent vacuous zero budgets, and its
-`is_expired_at` method accepts the current instant as a parameter for
-deterministic simulation testing. `VersionId` tags content identifiers with
-`Strong` or `Weak` confidence semantics. `ConnectorInputError` provides a
-unified validation error surface across all these types.
+builder pattern. `Budgets` uses `NonZeroUsize` and `NonZeroU64` to prevent
+vacuous zero budgets, and its `is_expired_at` method accepts the current
+instant as a parameter for deterministic simulation testing. `VersionId`
+tags content identifiers with `Strong` or `Weak` confidence semantics.
+`ConnectorInputError` provides a unified validation error surface across
+all these types.
 
-Chapter 3 shows how these types flow through connector `enumerate_page` and
-`open` methods, and how page validation catches invariant violations
-at the boundary between connectors and the coordination layer.
+Chapter 3 shows how these types flow through connector `choose_split_point`,
+`open`, and `read_range` methods, and how the `ScanDriver` adapter layer
+bridges connectors to the scan pipeline.

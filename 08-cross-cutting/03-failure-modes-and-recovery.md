@@ -192,7 +192,7 @@ sequenceDiagram
     B4-->>W: Error (source unreachable)
 
     W->>W: Retry with backoff
-    W->>B4: enumerate() again
+    W->>B4: scan again via ScanDriver
     B4->>S: API request
     S-xB4: Timeout again
 
@@ -295,9 +295,9 @@ stateDiagram-v2
 ### Recovery Path
 
 ```rust
-// Worker detects circuit breaker open
-match connector.enumerate(range, cursor, page_size) {
-    Err(ConnectorError::CircuitBreakerOpen { cooldown_until }) => {
+// Worker detects circuit breaker open (design-stage pseudocode)
+match driver.run(engine, config, events, commits, cancel) {
+    Err(err) if err.is_circuit_breaker_open() => {
         // Park the shard
         coordinator.park_shard(
             tenant,

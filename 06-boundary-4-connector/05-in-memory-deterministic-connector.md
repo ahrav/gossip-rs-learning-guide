@@ -55,34 +55,21 @@ Field-by-field breakdown:
 
 ## The Internal Type: PreparedItem
 
-At construction time, each `MemItem` is transformed into a `PreparedItem` with precomputed metadata. This is the single most important performance decision in the connector: all BLAKE3 hashing happens once, at construction, not on every page emission.
+At construction time, each `MemItem` is transformed into a `PreparedItem` with precomputed metadata. This is the single most important performance decision in the connector: size hints are computed once at construction, not on every split-point query.
 
 Here is the definition from `in_memory.rs`:
 
 ```rust
 /// Precomputed per-item metadata, built once at construction time.
 ///
-/// Every field except `key` and `bytes` is precomputed at construction time.
-/// `stable_item_id` and `version_id` are derived from key/bytes plus the
-/// connector tag; `item_ref` is the item's positional index in the sorted
-/// array; `size_hint` is `bytes.len()`. All are deterministic for a fixed
-/// input set. Computing them once eliminates redundant BLAKE3 hashing and
-/// index-to-[`ItemRef`] conversion on every page emission. This mirrors the
-/// `FileEntry` pattern used by `FilesystemConnector` (note: `FileEntry` is now
-/// a transient staging type in the filesystem connector's streaming model,
-/// not a persistent index entry; `GitEntry` in the git connector is the
-/// closer analogue).
+/// `size_hint` is precomputed as `bytes.len()` at construction time.
+/// Computing it once avoids repeated length queries during split-point
+/// estimation.
 struct PreparedItem {
     /// Sorted item key for ordering and cursor progression.
     key: ItemKey,
     /// Immutable payload bytes for read operations.
     bytes: Arc<[u8]>,
-    /// Big-endian `u64` index into the sorted item array.
-    item_ref: ItemRef,
-    /// Domain-separated BLAKE3 hash of `(connector_tag, key)`.
-    stable_item_id: StableItemId,
-    /// Domain-separated BLAKE3 hash of the content bytes.
-    version_id: ObjectVersionId,
     /// Precomputed `bytes.len() as u64`.
     size_hint: u64,
 }
@@ -92,9 +79,6 @@ Field-by-field breakdown:
 
 - **`key: ItemKey`** -- Carried forward from the input `MemItem`. Used for binary search during shard-bound resolution and cursor advancement.
 - **`bytes: Arc<[u8]>`** -- The shared content payload. Carried forward unchanged; the `open` method returns a reader over these bytes.
-- **`item_ref: ItemRef`** -- A big-endian `u64` encoding of this item's index in the sorted array. Item 0 gets `ItemRef([0,0,0,0,0,0,0,0])`, item 1 gets `ItemRef([0,0,0,0,0,0,0,1])`, and so on. This makes `ItemRef` values compact, deterministic, and decodable back to an index in O(1).
-- **`stable_item_id: StableItemId`** -- A domain-separated BLAKE3 hash of `(connector_tag, connector_instance_hash, key)`. Computed via the shared `derive_stable_item_id` helper in `common.rs`. The connector tag and connector instance hash ensure that the same key from different connectors or different connector instances produces distinct identity hashes.
-- **`version_id: ObjectVersionId`** -- A domain-separated BLAKE3 hash of the content bytes. Computed via `ObjectVersionId::from_version_bytes`. This is the content-addressed version fingerprint: if the bytes change, the version ID changes.
 - **`size_hint: u64`** -- Precomputed `bytes.len() as u64`. Used by the split-point algorithm to compute byte-weighted medians without re-measuring content length on every call.
 
 `PreparedItem` also implements a trait abstraction from `common.rs` that enables generic binary search:
@@ -137,15 +121,8 @@ Here is the definition from `in_memory.rs`:
 /// - Duplicate keys are **rejected** (the constructor panics).
 /// - [`ItemRef`] values are big-endian `u64` indices into that sorted vector,
 ///   so the Nth item always gets `ItemRef(N)`.
-/// - [`StableItemId`] is derived via [`ItemIdentityKey::stable_id`](gossip_contracts::identity::ItemIdentityKey::stable_id)
-///   (domain-separated BLAKE3 of connector-tag + connector-instance + key)
-///   and [`ObjectVersionId`]
-///   via [`ObjectVersionId::from_version_bytes`] (domain-separated BLAKE3 of
-///   the item's content bytes), both deterministic and precomputed once at
-///   construction. All items are emitted with [`VersionId::Strong`] because
-///   the in-memory content is immutable.
 ///
-/// Together these choices make enumeration order, identity fields, and read
+/// Together these choices make ordering and read
 /// handles reproducible across runs for identical inputs.
 ///
 /// # Resume semantics
@@ -202,14 +179,13 @@ Here is the definition from `in_memory.rs`:
     /// formatting so diagnostics stay redacted under the toxic-byte policy.
     ///
     /// [`with_tokens(false)`]: Self::with_tokens
-    pub fn new(connector_tag: ConnectorTag, connector_instance_id: impl AsRef<[u8]>, mut items: Vec<MemItem>) -> Self {
+    pub fn new(mut items: Vec<MemItem>) -> Self {
         items.sort_by(|left, right| left.key.cmp(&right.key));
-        let connector_instance =
-            ConnectorInstanceIdHash::from_instance_id_bytes(connector_instance_id.as_ref());
 
         // Enforce unique keys. Duplicate keys break cursor resume
-        // (upper_bound skips remaining duplicates), StableItemId derivation
-        // (collisions), and split-point selection (empty shards).
+        // (upper_bound skips remaining duplicates) and split-point selection
+        // (empty shards). Format the
+        // duplicate through ItemKey itself so panic diagnostics stay redacted.
         if let Some(pos) = items.windows(2).position(|w| w[0].key == w[1].key) {
             panic!(
                 "InMemoryDeterministicConnector requires unique item keys; \
@@ -220,20 +196,11 @@ Here is the definition from `in_memory.rs`:
 
         let prepared: Arc<[PreparedItem]> = items
             .into_iter()
-            .enumerate()
-            .map(|(idx, item)| {
-                let idx_u64 = u64::try_from(idx).expect("item count must fit in u64");
-                let item_ref = ItemRef::try_from_slice(&idx_u64.to_be_bytes())
-                    .expect("8-byte big-endian index is always valid for ItemRef");
-                let stable_item_id = derive_stable_item_id(connector_tag, connector_instance, &item.key);
-                let version_id = ObjectVersionId::from_version_bytes(&item.bytes);
+            .map(|item| {
                 let size_hint = item.bytes.len() as u64;
                 PreparedItem {
                     key: item.key,
                     bytes: item.bytes,
-                    item_ref,
-                    stable_item_id,
-                    version_id,
                     size_hint,
                 }
             })
@@ -246,15 +213,13 @@ Here is the definition from `in_memory.rs`:
     }
 ```
 
-The constructor performs four steps in sequence:
+The constructor performs three steps in sequence:
 
 **Step 1: Sort.** Items are sorted lexicographically by `ItemKey`. This is O(n log n) and happens once. After sorting, item positions are stable and can be used as `ItemRef` values.
 
-**Step 2: Instance identity.** The `connector_instance_id` bytes are hashed into a `ConnectorInstanceIdHash` via `from_instance_id_bytes`. This scoped hash participates in `StableItemId` derivation so that the same key from two different connector instances produces distinct identities.
+**Step 2: Duplicate rejection.** The `windows(2)` scan checks adjacent pairs in the sorted array for equal keys. If a duplicate is found, the constructor panics with a diagnostic message including the duplicate key's redacted display and its sorted position. The panic is deliberate: duplicate keys are a test-setup bug, not a runtime condition. The module documentation explains the two ways duplicates break correctness: cursor resume via `upper_bound` skips remaining duplicates, and split-point selection can return a duplicate key producing empty shards.
 
-**Step 3: Duplicate rejection.** The `windows(2)` scan checks adjacent pairs in the sorted array for equal keys. If a duplicate is found, the constructor panics with a diagnostic message including the duplicate key's redacted display and its sorted position. The panic is deliberate: duplicate keys are a test-setup bug, not a runtime condition. The module documentation explains the three ways duplicates break correctness: cursor resume via `upper_bound` skips remaining duplicates, `StableItemId` derivation collides, and split-point selection can return a duplicate key producing empty shards.
-
-**Step 4: Precomputation.** Each `MemItem` is transformed into a `PreparedItem` with all metadata computed eagerly. The `ItemRef` is the big-endian encoding of the item's sorted index. The `StableItemId` is a domain-separated BLAKE3 hash of the connector tag, connector instance hash, and key. The `ObjectVersionId` is a domain-separated BLAKE3 hash of the content bytes. The `size_hint` is `bytes.len()`. After this loop, no further hashing occurs -- page emission is pure copy.
+**Step 3: Precomputation.** Each `MemItem` is transformed into a `PreparedItem` with its `size_hint` precomputed as `bytes.len()`. After this loop, split-point estimation can operate without re-measuring content sizes.
 
 The `with_tokens` builder method controls token behavior:
 
@@ -274,135 +239,21 @@ Here is the definition from `in_memory.rs`:
 
 ---
 
-## The Core Enumeration Algorithm
+## How Items Are Scanned
 
-The `enumerate_page_bounds` method is the heart of the connector. It implements a 5-phase algorithm that resolves shard boundaries, advances past the cursor, and extracts a page of precomputed metadata.
+The in-memory connector does not expose an enumeration method. Instead, the
+`InMemoryScanSourceFactory` (covered in Chapter 8) constructs the connector
+from an `Assignment` and drives scanning through `ScanDriver::run()`. The
+driver iterates the sorted item array sequentially, calling
+`commit.begin_item()` / `commit.finish_item()` per item through the
+`CommitSink` protocol. The connector's `open()` and `read_range()` methods
+provide content access when the driver needs to feed item bytes to the
+scanner engine.
 
-Here is a simplified conceptual version of the method from `in_memory.rs`. The
-actual implementation delegates to shared helpers in `common.rs` —
-`common::resolve_page_bounds` for range/deadline resolution,
-`common::key_resume_start` for cursor advancement, and
-`common::assemble_pooled_page` for slab-backed page assembly — rather than
-inlining these steps. See `crates/gossip-connectors/src/in_memory.rs:323-405`
-for the full pooled implementation.
-
-```rust
-    /// Core page enumeration for both shard-based and explicit-range callers.
-    ///
-    /// # Algorithm
-    ///
-    /// 1. **Budget gate** -- Return retryable error if deadline expired.
-    /// 2. **Range validation** -- Reject `start > end` as a permanent error.
-    /// 3. **Range resolution** -- Map keys to indices via binary search.
-    /// 4. **Cursor advancement** -- Resume from `last_key` position.
-    ///    When tokens are enabled, the token is used as an O(1) fast path:
-    ///    validated by checking `items[token_idx - 1].key == last_key`. On
-    ///    mismatch, falls back to O(log n) `upper_bound` binary search.
-    /// 5. **Page extraction** -- Yield up to `max_items` consecutive items
-    ///    from precomputed metadata (clone/copy only, no hashing).
-    fn enumerate_page_bounds(
-        &self,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
-        cursor: &Cursor,
-        budgets: Budgets,
-    ) -> Result<EnumerationPage, EnumerateError> {
-        // Phase 1-3: resolve bounds and check deadline/range validity.
-        let bounds = common::resolve_page_bounds(&self.items, start, end, budgets)?;
-
-        // Phase 4: advance past the cursor's last-emitted key.
-        let key_resume = common::key_resume_start(&self.items, cursor, bounds.range_start);
-        let mut start_idx = key_resume;
-
-        // O(1) token fast path: when tokens are enabled and the cursor carries
-        // a well-formed token whose preceding item matches `last_key`, jump
-        // directly to the token index. On mismatch, fall back to the
-        // key-authoritative position computed above.
-        if let Some(last_key) = cursor.last_key() {
-            let token_idx = self
-                .emit_tokens
-                .then(|| common::cursor_token_index(cursor))
-                .flatten();
-
-            if let Some(token_idx) = token_idx
-                && token_idx > 0
-                && token_idx <= self.items.len()
-                && self.items[token_idx - 1].key == *last_key
-            {
-                start_idx = start_idx.max(token_idx);
-
-                #[cfg(debug_assertions)]
-                debug_assert_eq!(
-                    token_idx, key_resume,
-                    "token index {token_idx} disagrees with \
-                     key-derived resume position {key_resume}"
-                );
-            }
-        }
-
-        if start_idx >= bounds.range_end {
-            return Ok(EnumerationPage::new(Vec::new(), cursor.clone()));
-        }
-
-        // Phase 5: assemble page via pooled slab path.
-        let take = budgets.max_items().min(bounds.range_end - start_idx);
-        let page_items = &self.items[start_idx..start_idx + take];
-
-        // Stage item keys and refs into a page-local ByteSlab, then
-        // materialize wrappers from those slots (allocation-free cloning).
-        let staged = common::assemble_pooled_page(
-            page_items
-                .iter()
-                .map(|item| (item.key.as_bytes(), item.item_ref.as_bytes())),
-            self.emit_tokens,
-            start_idx,
-        )?;
-
-        let common::StagedPage { wrappers, token } = staged;
-        let mut out = Vec::with_capacity(wrappers.len());
-        for ((item_key, item_ref), item) in wrappers.into_iter().zip(page_items) {
-            out.push(
-                ScanItem::new(
-                    item_key,
-                    item_ref,
-                    item.stable_item_id,
-                    VersionId::Strong(item.version_id),
-                )
-                .with_size_hint(item.size_hint),
-            );
-        }
-
-        // Build continuation cursor from the last emitted key.
-        let last_key = match out.last() {
-            Some(item) => item.item_key().clone(),
-            None => return Ok(EnumerationPage::new(Vec::new(), cursor.clone())),
-        };
-        let next_cursor = common::build_next_cursor_from_staged(
-            last_key,
-            start_idx,
-            out.len(),
-            self.emit_tokens,
-            token,
-        )?;
-
-        Ok(EnumerationPage::new(out, next_cursor))
-    }
-```
-
-Each phase serves a distinct purpose:
-
-**Phase 1: Budget gate.** If the caller's deadline has already expired, the method returns `EnumerateError::retryable("budget deadline expired")` immediately. This is retryable (not permanent) because the same request with a fresh deadline would succeed. Returning an error rather than an empty page avoids ambiguity: an empty page means "no items in this range" (EOF), while a retryable error means "try again with more time."
-
-**Phase 2: Range validation.** If both start and end bounds are provided and `start > end`, the range is inverted. This is a permanent error because no amount of retrying will fix a malformed range.
-
-**Phase 3: Index resolution.** The `lower_bound` function from `common.rs` maps key boundaries to array indices via binary search (O(log n)). `lower_bound` returns the first index whose key is `>= bound`. For unbounded ranges (`None`), start defaults to 0 and end defaults to `items.len()`.
-
-**Phase 4: Cursor advancement.** This is the most intricate phase. It uses a labeled block (`'resolve`) with two paths:
-
-- **Token fast path (O(1)).** When tokens are enabled and the cursor carries a well-formed token, the token is parsed as a big-endian `u64` index. The connector validates that `items[token_idx - 1].key == last_key` -- this confirms the token has not gone stale. If validation passes, the token index is used directly. This check runs in all build profiles, not just debug.
-- **Key fallback (O(log n)).** If the token is missing, malformed, or fails validation, the connector falls back to `upper_bound` binary search on `last_key`. The `upper_bound` function returns the first index whose key is strictly greater than `last_key`, ensuring the last-emitted key is never re-emitted. In debug builds, a `debug_assert_eq!` verifies that the token and key paths agree -- catching bugs during development.
-
-**Phase 5: Page extraction.** The method takes up to `max_items` consecutive items from the precomputed `PreparedItem` array. Each item's metadata is cloned into a `ScanItem` with no hashing or computation. All items carry `VersionId::Strong` because the in-memory content is immutable. The continuation cursor carries the `last_key` and (when tokens are enabled) a big-endian token encoding the next index.
+The shared helpers in `common.rs` -- `resolve_bounds`, `key_resume_start`,
+`lower_bound`, `upper_bound` -- still handle shard-boundary resolution and
+cursor advancement for split-point selection, which needs to navigate the
+sorted item array by key range.
 
 ---
 
@@ -550,6 +401,6 @@ The methods take `&mut self` for API uniformity with connectors that maintain in
 
 ## Summary
 
-The `InMemoryDeterministicConnector` is a test double that provides the full connector API surface (enumeration, read, and split-point methods) using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes all metadata (BLAKE3 hashes, `ItemRef` indices, size hints) in a single O(n log n) pass. The connector takes a `connector_tag`, a `connector_instance_id`, and a `Vec<MemItem>`, deriving a `ConnectorInstanceIdHash` from the instance ID bytes for scoped identity derivation. The 5-phase enumeration algorithm in `enumerate_page_bounds` gates on budgets, validates ranges, resolves shard bounds via `lower_bound` binary search, advances past the cursor via an O(1) token fast path with O(log n) key fallback, and extracts pages from precomputed metadata with no further hashing. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical enumeration across runs for identical inputs.
+The `InMemoryDeterministicConnector` is a test double that provides the connector API surface (read and split-point methods) using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes size hints in a single O(n log n) pass. The connector takes a `Vec<MemItem>` and stores sorted `PreparedItem` records. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical ordering across runs for identical inputs. Scanning is driven by the `InMemoryScanSourceFactory` through the `ScanDriver::run()` protocol rather than page-by-page enumeration.
 
-Chapter 7 applies these same patterns to a real filesystem, where lazy indexing, symlink security, and TOCTOU gaps introduce constraints the in-memory connector avoids.
+Chapter 6 applies these same patterns to a real filesystem, where lazy indexing, symlink security, and TOCTOU gaps introduce constraints the in-memory connector avoids.

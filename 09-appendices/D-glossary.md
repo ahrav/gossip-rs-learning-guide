@@ -76,11 +76,9 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## E
 
-**EnumerateError**: Connector enumeration failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector `enumerate_page` methods. (Chapter 06)
+**EnumerateError**: Connector operation failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector planning methods like `choose_split_point`. (Chapter 06)
 
-**Enumeration**: Process of listing items from a source. Connectors implement ordered enumeration within shard ranges. (Chapter 06)
-
-**EnumerationPage**: Return type from `enumerate_page`: a vec of `ScanItem`s plus an optional next cursor for pagination. (Chapter 06)
+**Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the `ScanDriver::run()` protocol. (Chapter 06)
 
 **ErrorClass**: Retryable vs Permanent connector error classification. Retryable errors (timeouts, rate limits) trigger backoff; Permanent errors (not found, access denied) abort the shard. (Chapter 06)
 
@@ -198,9 +196,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## P
 
-**PageCommit**: (Design-stage — not yet implemented.) Typestate-encoded accumulator for findings in a page. States: Accumulating, Sealed, Committed. (Chapter 07-04)
-
-**PageValidationError**: Violation plus diagnostic details for page-level validation failures. Returned by the page validator when connector output violates ordering, uniqueness, or budget constraints. (Chapter 06)
+**PageCommit**: (Design-stage -- not yet implemented.) Typestate-encoded accumulator for findings in a page. States: Accumulating, Sealed, Committed. (Chapter 07-04)
 
 **ParkReason**: Enum explaining why a shard was parked: `SourceUnreachable`, `RateLimited`, etc. (Chapter 04-06, 08-03)
 
@@ -254,7 +250,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ScanSourceFactory**: Trait defined in `gossip-scan-driver` for creating scan sources. Produces items to feed into the detection pipeline.
 
-**ScanItem**: Enumerated item bundling key, ref, stable ID, version, and optional metadata. Produced by connector `enumerate_page` methods and consumed by the scan pipeline. (Chapter 06)
+**ScanItem**: Item bundling key, ref, stable ID, version, and optional metadata. Produced by connectors and consumed by the scan pipeline. (Chapter 06)
 
 **Sealed**: (Design-stage — not yet implemented.) Type state for `PageCommit` after sealing (no more findings can be added). Ready for commit. (Chapter 07-04)
 

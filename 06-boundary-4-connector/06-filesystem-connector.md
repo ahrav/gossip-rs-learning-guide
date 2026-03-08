@@ -6,9 +6,9 @@
 
 ## Why the Filesystem Connector Exists
 
-The in-memory connector from Chapter 6 proves that the enumeration contract works for items held entirely in process memory. Production scanners need a connector that reads files from disk. This introduces three problems the in-memory connector does not face: symlinks can escape the scan root, filesystem state can change between enumeration and reading (TOCTOU), and the directory walk itself can be expensive enough to blow deadlines.
+The in-memory connector from Chapter 5 proves that the enumeration contract works for items held entirely in process memory. Production scanners need a connector that reads files from disk. This introduces three problems the in-memory connector does not face: symlinks can escape the scan root, filesystem state can change between enumeration and reading (TOCTOU), and the directory walk itself can be expensive enough to blow deadlines.
 
-The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` solves all three. It provides enumeration and read methods over a rooted directory tree, applying symlink-aware traversal, component-by-component `openat` with `O_NOFOLLOW` at every step, and a streaming DFS walk with deadline enforcement. Chapter 6's in-memory connector shares the binary-search and byte-weighted-split utilities from `common.rs`; this chapter shows how the filesystem connector replaces those shared index-then-search primitives with a fundamentally different streaming architecture that trades snapshot isolation for bounded memory.
+The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` solves all three. It provides read and split-point methods over a rooted directory tree, applying symlink-aware traversal, component-by-component `openat` with `O_NOFOLLOW` at every step, and a streaming DFS walk with deadline enforcement. Chapter 5's in-memory connector shares the binary-search and byte-weighted-split utilities from `common.rs`; this chapter shows how the filesystem connector replaces those shared index-then-search primitives with a fundamentally different streaming architecture that trades snapshot isolation for bounded memory.
 
 > **Platform availability:** `FilesystemConnector` is only available on Unix
 > (`#[cfg(unix)]`). The module relies on Unix-specific APIs: `openat` with
@@ -505,29 +505,19 @@ In test builds, the connector runs a cross-check: after token-based resume, it p
 
 ---
 
-## Enumeration: `enumerate_page_bounds`
+## How Scanning is Driven
 
-The core enumeration method at `filesystem.rs:737-862` drives the streaming walk directly:
-
-1. **Deadline check.** If the budget is already expired, return a retryable error.
-
-2. **Bound validation.** If `start > end`, return a permanent error.
-
-3. **Bound intersection.** The `intersect_key_bounds` helper (`filesystem.rs:1220-1244`) intersects per-request bounds with connector-level key-range bounds. If the intersection collapses to an empty interval, return an empty page immediately.
-
-4. **Cursor alignment.** `align_walk_to_cursor` positions the walk state (see above).
-
-5. **Page filling.** Loop calling `WalkState::next_file`, skipping entries below `effective_start`, stopping at `effective_end` (stashing the over-bound file in `pending` for potential reuse by a later request). Collect up to `budgets.max_items()` entries. A `debug_assert!` verifies strictly ascending keys within the page.
-
-6. **Page assembly.** Collected `FileEntry` values are staged into a pooled `ByteSlab` via `assemble_pooled_page_shared_key_ref` and materialized as `ScanItem` values with size hints.
-
-7. **Cursor construction.** `build_next_walk_cursor` encodes the last emitted key (plus an optional walk token if `emit_tokens` is true) into the next cursor.
-
-If no in-range items are available, the returned page is empty and the cursor is left unchanged.
+The filesystem connector does not expose a page-by-page enumeration method
+to external callers. Instead, scanning is orchestrated through the
+`FilesystemScanSourceFactory` (covered in Chapter 8), which constructs a
+`FsScanDriver` that delegates to `parallel_scan_dir` from the
+scanner-scheduler crate. The walk state, cursor alignment, and split
+estimation mechanisms described above are used internally by the
+driver to traverse the filesystem within the assigned shard bounds.
 
 ### Capabilities
 
-The `caps` method at `filesystem.rs:1053-1060` reports:
+The `caps` method at `filesystem.rs` reports:
 
 ```rust
 pub fn caps(&self) -> ConnectorCapabilities {
@@ -739,7 +729,7 @@ Both guards fall back to the rank-based midpoint instead.
 
 The estimator is instance-scoped to the `FilesystemConnector`. Three integration points tie it to the connector's lifecycle:
 
-**Feeding during pagination.** Inside `enumerate_page_bounds` (`filesystem.rs:818`), every in-range file emitted during page assembly is observed:
+**Feeding during scanning.** During the walk, every in-range file emitted is observed:
 
 ```rust
 // Only caller-visible, in-range files contribute to the estimator.
@@ -944,4 +934,4 @@ The FD cache widens the TOCTOU window slightly: a cached descriptor may outlive 
 
 ## Summary
 
-The `FilesystemConnector` provides a security-hardened, deadline-aware, streaming filesystem connector. `WalkState` drives a resumable sorted DFS walk that keeps memory proportional to the active directory frontier rather than the total file count. `WalkFrame` buffers and sorts one directory's entries for globally ordered key emission via `cmp_with_trailing_sep`. `ensure_root_fd` lazily opens and identity-verifies the root directory without latching failures. `should_skip_subtree` prunes entire directory subtrees that cannot overlap the requested key range, and `visited_dirs` breaks traversal cycles from bind mounts or directory hardlinks. `WalkToken` serializes DFS stack positions for O(1) cursor resume, with key-only fallback as the ground truth. `open_beneath_root` applies `O_NOFOLLOW` at every component of the `openat` traversal, opens with `O_NONBLOCK` to prevent FIFO blocking, and validates via `fstat`. Split hints are provided by an integrated `StreamingSplitEstimator` that is fed during pagination and produces byte-weighted split keys in bounded memory. `is_permanent_io_error` in `common.rs` is shared between filesystem and git connectors. Chapter 8 introduces the conformance harness that validates both this connector and the in-memory connector against the same contract.
+The `FilesystemConnector` provides a security-hardened, deadline-aware, streaming filesystem connector. `WalkState` drives a resumable sorted DFS walk that keeps memory proportional to the active directory frontier rather than the total file count. `WalkFrame` buffers and sorts one directory's entries for globally ordered key emission via `cmp_with_trailing_sep`. `ensure_root_fd` lazily opens and identity-verifies the root directory without latching failures. `should_skip_subtree` prunes entire directory subtrees that cannot overlap the requested key range, and `visited_dirs` breaks traversal cycles from bind mounts or directory hardlinks. `WalkToken` serializes DFS stack positions for O(1) cursor resume, with key-only fallback as the ground truth. `open_beneath_root` applies `O_NOFOLLOW` at every component of the `openat` traversal, opens with `O_NONBLOCK` to prevent FIFO blocking, and validates via `fstat`. Split hints are provided by an integrated `StreamingSplitEstimator` that is fed during scanning and produces byte-weighted split keys in bounded memory. `is_permanent_io_error` in `common.rs` is shared between filesystem and git connectors. Chapter 8 covers the scan-driver adapter factories that bridge this connector to the `ScanDriver` execution model.
