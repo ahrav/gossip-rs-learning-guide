@@ -1,0 +1,387 @@
+# "Untrusted Repositories" -- Git Connector
+
+*A CI pipeline dispatches a secret scanner against 2,400 developer fork
+repositories. Repository `evil-fork` contains a tracked file at
+`config/../../etc/shadow` -- a path that `git ls-files -z` dutifully
+reports as a legitimate tracked entry. The connector joins this path to the
+repository root `/data/repos/evil-fork` and calls `fs::canonicalize`. The
+resolved absolute path is `/data/etc/shadow`, which no longer starts with
+`/data/repos/evil-fork`. Without the containment check, the connector's
+`open()` call hands 1,847 bytes of system password hashes to the detection
+engine. With the check, the path is silently skipped during indexing. The
+entry never appears in the enumeration page. The scanner processes 2,399
+repositories normally and produces zero findings from `/etc/shadow`. A
+single `starts_with` check on a canonicalized path prevents the scanner
+from becoming the breach vector.*
+
+---
+
+## Why a Git Connector Exists
+
+The filesystem connector from Chapter 7 indexes all regular files under a
+directory root. But a Git repository is not merely a directory of files --
+it has a tracked-file manifest maintained by `git ls-files`. Scanning
+untracked files (build artifacts, IDE caches, `.git` internal objects)
+wastes time and produces false positives. A Git-specific connector restricts
+enumeration to tracked files only, matching what a developer would see with
+`git status`.
+
+The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~690 lines)
+implements both `EnumerationConnector` and `ReadConnector`. It indexes
+tracked files via `git ls-files -z`, produces paginated enumeration pages
+from a sorted in-memory snapshot, and serves content reads through
+standard filesystem I/O with path traversal defenses.
+
+---
+
+## Connector Identity
+
+```rust
+/// Connector tag used to domain-separate stable item identity derivation.
+pub const GIT_CONNECTOR_TAG: ConnectorTag = ConnectorTag::from_ascii(b"gitlocal");
+```
+
+The `"gitlocal"` tag ensures that a file named `README.md` tracked in a
+Git repository produces a different `StableItemId` than the same filename
+enumerated by the filesystem connector (`"fslocal"`) or any other connector.
+Domain separation is enforced by the shared `derive_stable_item_id` helper
+in `common.rs`, which hashes `(connector_tag, connector_instance_hash, key)`
+via BLAKE3.
+
+---
+
+## The Indexed Entry Type
+
+```rust
+/// A single indexed file from `git ls-files`.
+#[derive(Debug)]
+struct GitEntry {
+    /// Repository-relative path used as both the item key and the item ref.
+    key: ItemKey,
+    /// Domain-separated BLAKE3 identity derived from
+    /// `(ConnectorTag, ConnectorInstanceIdHash, key)`.
+    stable_item_id: StableItemId,
+    /// Weak version fingerprint over `(path, size, mtime)`.
+    version: VersionId,
+    /// File size in bytes at index time, used as a size hint for budgeting.
+    size_hint: u64,
+}
+```
+
+A key design decision: **item key and item ref share identical bytes.** The
+repository-relative path serves as both the enumeration key (for cursor
+progression and shard range checks) and the read handle (for `open` and
+`read_range`). The `build_git_entry` function validates the same bytes
+against both `ItemKey::try_from_slice` and `ItemRef::try_from_slice` at
+index time, catching oversized or malformed paths before they enter the
+enumeration page.
+
+`GitEntry` implements `common::KeyedEntry`, enabling generic binary search
+through the shared utilities in `common.rs`. Split-point selection uses the
+shared `common::estimate_split_from_sorted` helper which feeds entries into
+a `StreamingSplitEstimator` for byte-weighted median estimation.
+
+---
+
+## The IndexState Lifecycle
+
+Unlike the now-streaming filesystem connector (which uses `Option<WalkState>`
+and retries on every call), `GitConnector` retains a lazy tri-state indexing
+lifecycle that latches permanent failures:
+
+```rust
+enum IndexState {
+    /// No indexing attempt has been made yet.
+    NotIndexed,
+    /// Snapshot built successfully; entries are populated and sorted.
+    Indexed,
+    /// A permanent error occurred during indexing; retries are suppressed.
+    Failed(String),
+}
+```
+
+Both `Indexed` and `Failed` are terminal states. Once the connector
+successfully indexes, it never re-shells to `git`. Once a permanent error
+is latched, subsequent calls fail fast with a stable diagnostic. Retryable
+errors (deadline expiry) leave the state as `NotIndexed`, permitting
+re-attempts with fresh budgets.
+
+---
+
+## The Connector Struct
+
+```rust
+pub struct GitConnector {
+    /// Absolute path to the repository root (working directory).
+    repo: PathBuf,
+    /// Stable connector-instance scope used for `StableItemId` derivation.
+    connector_instance: ConnectorInstanceIdHash,
+    /// Whether pagination cursors include positional tokens for O(1) resume.
+    emit_tokens: bool,
+    /// Optional upper bound on tracked files.
+    max_tracked_files: Option<usize>,
+    /// Lazy indexing state machine.
+    index_state: IndexState,
+    /// Sorted snapshot of tracked files, populated by `ensure_indexed`.
+    entries: Vec<GitEntry>,
+}
+```
+
+Construction is infallible (`GitConnector::new(repo)`) -- no I/O occurs.
+The repo path is hashed into a `ConnectorInstanceIdHash` at construction
+time, which scopes `StableItemId` derivation so the same file key in
+different repositories produces distinct identities.
+Builder methods `with_tokens(bool)` and `with_max_tracked_files(usize)`
+configure behavior before the first enumeration call triggers indexing.
+
+---
+
+## Indexing: `ensure_indexed`
+
+The `ensure_indexed` method is the gateway to all operations. It performs
+five steps:
+
+**Step 1: State check.** If already `Indexed`, return `Ok(())`. If
+`Failed`, return the memoized error.
+
+**Step 2: Deadline check.** If the deadline has expired before any I/O,
+return a retryable error immediately.
+
+**Step 3: Root canonicalization.** `fs::canonicalize(&self.repo)` resolves
+the repository path to its real filesystem location. This prevents cwd
+drift and ensures all subsequent path joins resolve against the canonical
+root. If canonicalization fails, the error is classified: permanent errors
+(not found, permission denied) latch `IndexState::Failed`; retryable errors
+leave the state as `NotIndexed`.
+
+**Step 4: Git ls-files.** The `list_git_tracked_paths` function shells out
+to `git -C <repo> ls-files -z --`, using NUL-delimited output so paths
+containing newlines or special characters are handled correctly. A non-zero
+exit from `git` is classified as permanent (typically: not a git repository).
+
+```rust
+fn list_git_tracked_paths(repo: &Path) -> Result<Vec<Vec<u8>>, EnumerateError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("ls-files")
+        .arg("-z")
+        .arg("--")
+        .output()
+        .map_err(|error| classify_io_enumerate_error("git ls-files", repo, &error))?;
+
+    if !output.status.success() {
+        let digest = common::path_digest(repo);
+        return Err(EnumerateError::permanent(format!(
+            "git ls-files failed in ({digest}) (status={:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let mut paths = Vec::new();
+    for entry in output.stdout.split(|byte| *byte == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        paths.push(entry.to_vec());
+    }
+    Ok(paths)
+}
+```
+
+**Step 5: Per-file validation and entry building.** For each tracked path,
+the connector applies a three-layer defense against path traversal:
+
+1. **Component filter.** Paths containing `..` components are rejected:
+
+```rust
+if rel_path
+    .components()
+    .any(|c| matches!(c, Component::ParentDir))
+{
+    continue;
+}
+```
+
+2. **Canonicalize + containment.** The resolved absolute path must start
+   with the canonicalized repo root:
+
+```rust
+let canonical_abs = match fs::canonicalize(&abs_path) {
+    Ok(p) => p,
+    Err(_) => continue,
+};
+if !canonical_abs.starts_with(&self.repo) {
+    continue;
+}
+```
+
+3. **Symlink rejection.** `symlink_metadata` (not `metadata`) checks the
+   entry without following symlinks. Only regular files are indexed:
+
+```rust
+let metadata = match fs::symlink_metadata(&abs_path) {
+    Ok(m) => m,
+    Err(error) => {
+        return Err(classify_io_enumerate_error("metadata", &abs_path, &error));
+    }
+};
+if !metadata.is_file() {
+    continue;
+}
+```
+
+After all paths are processed, entries are sorted by key and the state
+transitions to `Indexed`.
+
+---
+
+## Weak Versioning
+
+Git does not expose a strong per-file content hash through `ls-files`, so
+the connector produces weak versions: a BLAKE3 digest over
+`(path, file_size, mtime_nanos)`.
+
+```rust
+fn build_weak_version(
+    key_bytes: &[u8],
+    size_hint: u64,
+    modified: Option<std::time::SystemTime>,
+) -> VersionId {
+    const INLINE_CAP: usize = 152;
+    let total_len = key_bytes.len() + 24;
+    let modified_nanos = modified
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+
+    if total_len <= INLINE_CAP {
+        let mut buf = [0u8; INLINE_CAP];
+        buf[..key_bytes.len()].copy_from_slice(key_bytes);
+        buf[key_bytes.len()..key_bytes.len() + 8].copy_from_slice(&size_hint.to_le_bytes());
+        buf[key_bytes.len() + 8..key_bytes.len() + 24]
+            .copy_from_slice(&modified_nanos.to_le_bytes());
+        VersionId::Weak(ObjectVersionId::from_version_bytes(&buf[..total_len]))
+    } else {
+        let mut version_material = Vec::with_capacity(total_len);
+        version_material.extend_from_slice(key_bytes);
+        version_material.extend_from_slice(&size_hint.to_le_bytes());
+        version_material.extend_from_slice(&modified_nanos.to_le_bytes());
+        VersionId::Weak(ObjectVersionId::from_version_bytes(&version_material))
+    }
+}
+```
+
+The function uses an inline stack buffer (152 bytes) for paths up to 128
+bytes, avoiding heap allocation for the common case. When `modified` is
+`None` (filesystems without mtime support), the mtime component defaults to
+zero -- still unique per `(path, size)` but with reduced change sensitivity.
+
+---
+
+## Enumeration: `enumerate_page_bounds`
+
+The enumeration method follows the shared pagination pattern from `common.rs`:
+
+1. **Ensure indexed.** `self.ensure_indexed(budgets.deadline())?` triggers
+   the git snapshot on first call.
+2. **Resolve bounds.** `common::resolve_page_bounds` maps key boundaries to
+   index positions via binary search and checks the deadline.
+3. **Cursor-based resume.** `common::key_resume_start` computes the first
+   index strictly greater than the cursor's `last_key`. When tokens are
+   enabled, the connector performs an O(1) fast-path check: if the entry at
+   `token_idx - 1` matches the cursor's last key, the token index is used
+   directly. If the token is missing, malformed, or disagrees, the
+   binary-search result is used instead.
+4. **Pooled page assembly.** Items are assembled via
+   `common::assemble_pooled_page_shared_key_ref`, which stages each entry's
+   key bytes once into a page-local `ByteSlab` and materializes both
+   `ItemKey` and `ItemRef` from the same slot (since key == ref for this
+   connector).
+5. **Cursor construction.** `common::build_next_cursor_from_staged` builds
+   the continuation cursor with the last emitted key and (when tokens are
+   enabled) a big-endian index token.
+
+---
+
+## Read Path: Security at Open Time
+
+The `open_path_for_ref` method resolves an `ItemRef` to an absolute
+filesystem path with two safety checks:
+
+```rust
+fn open_path_for_ref(&mut self, item_ref: &ItemRef) -> Result<PathBuf, ReadError> {
+    self.ensure_indexed(None).map_err(enumerate_error_to_read)?;
+
+    let ref_bytes = item_ref.as_bytes();
+    self.entries
+        .binary_search_by(|entry| entry.key.as_bytes().cmp(ref_bytes))
+        .map_err(|_| ReadError::permanent("item_ref not found in index"))?;
+
+    let abs_path = self.repo.join(path_buf_from_bytes(ref_bytes));
+    let canonical = fs::canonicalize(&abs_path)
+        .map_err(|error| classify_io_read_error("canonicalize", Some(&abs_path), &error))?;
+    if !canonical.starts_with(&self.repo) {
+        return Err(ReadError::permanent(
+            "resolved path escapes repository boundary",
+        ));
+    }
+    Ok(abs_path)
+}
+```
+
+**Membership verification.** A binary search against the sorted index
+confirms the requested ref exists in the snapshot. This prevents reading
+files not in the index.
+
+**Containment check.** Even after membership verification, the path is
+re-canonicalized and checked against the repo boundary. This catches
+read-time escapes where a symlink was created between indexing and reading.
+
+---
+
+## Capability Flags
+
+```rust
+impl EnumerationConnector for GitConnector {
+    fn caps(&self) -> ConnectorCapabilities {
+        ConnectorCapabilities {
+            seek_by_key: true,
+            token_resume: self.emit_tokens,
+            range_read: true,
+            split_hints: true,
+        }
+    }
+}
+```
+
+The full capability set, matching the in-memory and filesystem connectors.
+`token_resume` tracks `emit_tokens` so callers can test key-only resume by
+constructing with `with_tokens(false)`.
+
+The `ReadConnector` implementation provides both `open` (returning a
+`Box<dyn Read + Send>` wrapping `fs::File`) and `read_range` (using
+`file.seek(SeekFrom::Start(offset))` followed by `file.read`). Both methods
+delegate to `open_path_for_ref` for path resolution and containment checking.
+The `read_range` method includes the standard overflow guard
+(`offset.checked_add(dst.len() as u64)`) and budget clamping.
+
+---
+
+## Summary
+
+The `GitConnector` provides a security-hardened, deterministic connector for
+Git-tracked repository files. It indexes via `git ls-files -z` with a lazy
+tri-state lifecycle (`NotIndexed`, `Indexed`, `Failed`). Path traversal
+defense uses a three-layer approach: component filtering (reject `..`),
+canonicalize-and-contain (resolved path must start with the canonical repo
+root), and symlink rejection (`symlink_metadata`). The connector tag
+`"gitlocal"` domain-separates identity from other connector types. Weak
+versioning from `(path, size, mtime)` provides change detection without
+content hashing. The shared-slot pooled page assembly path avoids per-item
+heap allocation during enumeration. Read-time containment re-canonicalizes
+paths before every open to catch symlink escapes created after indexing.
+
+Chapter 10 covers the scan-driver adapter factories that bridge these
+connectors to the new `ScanDriver` execution model.
