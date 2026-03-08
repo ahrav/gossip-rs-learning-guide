@@ -42,8 +42,6 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ConnectorCapabilities**: Feature-flag struct advertising what a connector supports: `seek_by_key`, `token_resume`, `range_read`, `split_hints`. Returned by connectors to let the coordination layer adapt its strategy. (Chapter 06)
 
-**ConnectorInstance**: Convenience supertrait combining `EnumerationConnector + ReadConnector + Send`. Used as a single bound when the full connector interface is required. (Chapter 06)
-
 **ConnectorInstanceIdHash**: 32-byte BLAKE3 derive-key hash of a connector instance identifier. Variable-length instance IDs (e.g., `"github-installation-1"`) are hashed once into a fixed-width value so that `ItemIdentityKey` framing remains simple and identity collisions are prevented when two instances scan the same locator under the same connector tag. Derived via `domain::CONNECTOR_INSTANCE_ID_V1` (`"gossip/connector-instance-id/v1"`). Defined in `item.rs`. (Chapter 02-05, Appendix B)
 
 **ConnectorTag**: Identity type for the source system. Example: `ConnectorTag::GitHub`. (Chapter 02-05)
@@ -78,11 +76,9 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## E
 
-**EnumerateError**: Connector enumeration failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from `EnumerationConnector::enumerate_page`. (Chapter 06)
+**EnumerateError**: Connector enumeration failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector `enumerate_page` methods. (Chapter 06)
 
 **Enumeration**: Process of listing items from a source. Connectors implement ordered enumeration within shard ranges. (Chapter 06)
-
-**EnumerationConnector**: Trait for paginated item enumeration from external sources. Primary method: `enumerate_page` returns an `EnumerationPage` of `ScanItem`s plus a next cursor. (Chapter 06)
 
 **EnumerationPage**: Return type from `enumerate_page`: a vec of `ScanItem`s plus an optional next cursor for pagination. (Chapter 06)
 
@@ -138,7 +134,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ItemKey**: Connector-specific identity for a resource. Example: GitHub URL, S3 path. (Chapter 02-05, 05-02)
 
-**ItemRef**: Opaque handle for read operations, produced during enumeration. Passed to `ReadConnector::open` to retrieve item content. (Chapter 06)
+**ItemRef**: Opaque handle for read operations, produced during enumeration. Passed to connector `open` methods to retrieve item content. (Chapter 06)
 
 ## K
 
@@ -232,8 +228,6 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Range Sharding**: Partitioning work by key range. Enables parallelism and resumability. (Chapter 03, 05-02)
 
-**ReadConnector**: Trait for opening item content as a streaming reader. Given an `ItemRef` produced during enumeration, returns an `AsyncRead` handle for the item's bytes. (Chapter 06)
-
 **Redacted Debug**: Custom `Debug` impl that hides sensitive data. Used for `TenantSecretKey`. (Appendix A)
 
 **RingBuffer<T, N>**: Fixed-capacity, stack-allocated FIFO ring buffer backed by `MaybeUninit` with power-of-2 bitwise index arithmetic. Used as `RingBuffer<OpLogEntry, 16>` for bounded shard op-logs. `push_back_overwrite` provides O(1) FIFO eviction. Defined in `gossip-stdx`. (Appendix F)
@@ -260,7 +254,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ScanSourceFactory**: Trait defined in `gossip-scan-driver` for creating scan sources. Produces items to feed into the detection pipeline.
 
-**ScanItem**: Enumerated item bundling key, ref, stable ID, version, and optional metadata. Produced by `EnumerationConnector::enumerate_page` and consumed by the scan pipeline. (Chapter 06)
+**ScanItem**: Enumerated item bundling key, ref, stable ID, version, and optional metadata. Produced by connector `enumerate_page` methods and consumed by the scan pipeline. (Chapter 06)
 
 **Sealed**: (Design-stage — not yet implemented.) Type state for `PageCommit` after sealing (no more findings can be added). Ready for commit. (Chapter 07-04)
 

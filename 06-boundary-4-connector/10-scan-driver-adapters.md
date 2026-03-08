@@ -19,7 +19,7 @@ assignments without knowing which engine runs behind the trait.*
 
 ## Why Scan-Driver Adapters Exist
 
-The `EnumerationConnector` and `ReadConnector` traits from Chapters 1-3
+The connector enumeration and read methods from Chapters 1-3
 define a page-by-page enumeration model: enumerate items, advance the cursor,
 read content. This model is clean for contract definition and conformance
 testing, but production scan engines operate at a higher level of
@@ -41,13 +41,6 @@ The `gossip_scan_driver` crate defines two traits for this higher-level model:
 The adapter implementations live in
 `crates/gossip-connectors/src/scan_driver.rs` (~1,200 lines). This module
 bridges the gap between the connector contracts and the scan execution model.
-
-> **Deprecation note:** The `EnumerationConnector` and `ReadConnector` trait
-> doc comments at `api.rs:344-354` state: "Deprecated surface: new unified
-> execution paths should use `gossip_scan_driver::ScanSourceFactory` and
-> `gossip_scan_driver::ScanDriver`." The page-by-page traits remain
-> supported for Phase III callers, but new orchestration paths use the
-> adapter factories described here.
 
 ---
 
@@ -461,13 +454,13 @@ completing and causing the scoped thread join to deadlock.
 
 ## How the Adapters Relate to the Connector Traits
 
-The adapter layer does not replace the connector traits -- it builds on
-them. The `EnumerationConnector` and `ReadConnector` traits define the
+The adapter layer does not replace the connector API -- it builds on
+it. The connector enumeration and read methods define the
 contract vocabulary: what a page looks like, how cursors progress, what
 errors mean. The `ScanDriver` adapters consume this vocabulary while
 providing a higher-level execution interface:
 
-| Concern | Connector Traits | ScanDriver Adapters |
+| Concern | Connector Methods | ScanDriver Adapters |
 |---------|-----------------|---------------------|
 | Page enumeration | `enumerate_page` returns one page | `run` processes all items in one call |
 | Content access | `open` / `read_range` per item | Engine handles reads internally |
@@ -476,7 +469,7 @@ providing a higher-level execution interface:
 | Finding persistence | Not modeled | `CommitSink` parameter |
 | Progress reporting | Not modeled | `EventOutput` parameter |
 
-The connector traits remain the right abstraction for conformance testing
+The connector methods remain the right abstraction for conformance testing
 (Chapter 8), page validation (Chapter 4), and any component that needs to
 reason about individual enumeration pages. The scan-driver adapters are the
 right abstraction for production orchestration that dispatches heterogeneous
@@ -498,6 +491,6 @@ Each factory declares its capabilities (checkpoint hints, cooperative
 cancel) so the orchestrator can adapt its dispatch strategy. The
 `OwnedCoreEvent` and `forward_commits` patterns handle the lifetime and
 error-handling challenges of cross-thread event forwarding. Together with
-the connector traits from earlier chapters, these adapters form the
+the connector API from earlier chapters, these adapters form the
 complete interface between external data sources and the Gossip-rs scanning
 pipeline.

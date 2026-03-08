@@ -1,4 +1,4 @@
-# When Memory Forgets -- The etcd Production Backend
+# When Memory Forgets -- The etcd Production Backend Infrastructure
 
 *The cluster has been running for fourteen hours. Six workers coordinate 50,000 shards across 12 tenants, scanning an 11-petabyte corpus. The in-memory coordinator holds the entire truth: which shards are active, which workers hold leases, where each cursor last checkpointed. At 02:17 UTC the coordinator process receives SIGKILL — an OOM event triggered by a co-located batch job. The process restarts in 400 milliseconds. But when it comes back, the `InMemoryCoordinator` is empty. Every `RunRecord` is gone. Every `ShardRecord` is gone. The 50,000 shards that were mid-scan have no cursors, no lease owners, no fence epochs. Workers attempt to renew leases against shard keys that no longer exist and receive `ShardNotFound` errors. The entire scan must be re-discovered from external metadata, re-registered, and re-assigned from the beginning. Fourteen hours of incremental cursor progress — checkpointed but never persisted to disk — evaporates in a single process restart. The in-memory coordinator works perfectly for development and simulation testing. It does not survive production.*
 
@@ -6,27 +6,131 @@
 
 The `InMemoryCoordinator` implements every coordination trait with full protocol correctness. It passes the simulation test suite. Its shard lifecycle, lease fencing, and idempotency logic are verified against the TLA+ specification. But it stores all state in process memory, which means a coordinator restart is a total-loss event. In a production deployment, the coordinator must survive restarts, rolling upgrades, and node failures without losing track of which shards are mid-scan, which workers hold leases, or where cursors last checkpointed.
 
-etcd is a natural choice for this persistence layer. It provides linearizable key-value storage with transactional multi-key writes, lease-based TTLs, and prefix-range scans — exactly the primitives needed for coordination state. The `gossip-coordination-etcd` crate builds the bridge between the coordination protocol and a live etcd cluster.
+etcd is a natural choice for this persistence layer. It provides linearizable key-value storage with transactional multi-key writes, lease-based TTLs, and prefix-range scans — exactly the primitives needed for coordination state. The `gossip-coordination-etcd` crate builds the bridge between the coordination protocol and a live etcd cluster. Unlike an approach that would delegate protocol logic to `InMemoryCoordinator` and persist state as a side-effect, the `EtcdCoordinator` implements `CoordinationBackend`, `RunManagement`, and `ShardClaiming` directly against etcd. Every mutation is a CAS transaction against etcd keys. Every query reconstructs domain types from stored blobs. State survives process restarts because it never existed only in memory.
 
-The crate provides `EtcdCoordinator`, a backend that connects to a real etcd cluster over gRPC, constructs a deterministic keyspace for all coordination records, and defines a versioned binary codec for serializing `RunRecord` and `ShardRecord` values. It is structured in five modules: `config` for validated connection parameters, `keyspace` for deterministic key construction, `codec` for binary serialization, `backend` for the coordinator struct and trait implementations, and `error` for unified failure types.
+The crate is structured in five modules: `config` for validated connection parameters and persistence-tuning knobs, `keyspace` for deterministic key construction, `codec` for binary serialization of records and owner-key bindings, `backend` for the coordinator struct and direct trait implementations, and `error` for unified failure types. The entire crate is marked `#![forbid(unsafe_code)]`. There is no unsafe Rust anywhere in the etcd backend. Every field encoding, bounds check, and allocation rollback operates through safe Rust abstractions.
 
-The entire crate is marked `#![forbid(unsafe_code)]`. There is no unsafe Rust anywhere in the etcd backend. Every field encoding, bounds check, and allocation rollback operates through safe Rust abstractions.
+From `lib.rs`:
+
+```rust
+#![forbid(unsafe_code)]
+
+mod backend;
+mod codec;
+mod config;
+mod error;
+mod keyspace;
+```
+
+This chapter covers the infrastructure layers — config, keyspace, codec, and error — that form the foundation beneath the live backend. Chapter 14 covers how `EtcdCoordinator` uses these primitives to implement the coordination protocol directly against etcd with CAS transactions, owner key fencing, and lease management.
 
 ## Validated Configuration
 
-Before any network I/O occurs, the etcd backend validates its connection parameters through `EtcdCoordinatorConfig`. Configuration validation happens at construction time, not at first use — a pattern that ensures the system fails immediately with a clear error message rather than minutes later when the first etcd RPC fires. The struct captures two pieces of information: a list of etcd cluster endpoints and a namespace prefix that scopes all coordination keys.
+Before any network I/O occurs, the etcd backend validates its connection parameters through `EtcdCoordinatorConfig`. Configuration validation happens at construction time, not at first use — a pattern that ensures the system fails immediately with a clear error message rather than minutes later when the first etcd RPC fires. The struct captures six fields: a list of etcd cluster endpoints, a namespace prefix that scopes all coordination keys, a wall-clock TTL for owner leases, a retry budget for optimistic CAS transactions, optional authentication credentials, and optional TLS configuration.
 
 From `config.rs`:
 
 ```rust
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct EtcdCoordinatorConfig {
     endpoints: Vec<String>,
     namespace_prefix: String,
+    owner_lease_ttl_secs: i64,
+    optimistic_txn_retries: usize,
+    /// Optional username/password pair for etcd authentication.
+    auth: Option<(String, String)>,
+    /// Optional TLS configuration for encrypted etcd connections.
+    #[cfg(feature = "tls")]
+    tls: Option<etcd_client::TlsOptions>,
 }
 ```
 
-Construction goes through `new()`, which trims whitespace from every endpoint and the prefix before running validation. This normalization step matters in practice: endpoints read from environment variables or YAML config files often carry trailing whitespace or newlines that would otherwise cause silent connection failures. The `validate()` method enforces seven rules, each with a dedicated error variant.
+The first two fields — `endpoints` and `namespace_prefix` — carry connection identity. The next two — `owner_lease_ttl_secs` and `optimistic_txn_retries` — are persistence-tuning knobs that control how the backend interacts with etcd during live operation. `owner_lease_ttl_secs` controls the wall-clock etcd lease attached to shard owner keys: if a worker dies without releasing its lease, the owner key is automatically deleted after this many seconds. `optimistic_txn_retries` bounds the number of read-modify-write retry loops around a fenced etcd transaction before the backend gives up and returns an error. These knobs exist because the backend executes CAS transactions directly against etcd — there is no in-memory delegate that absorbs the retry logic.
+
+Three constants define the defaults:
+
+From `config.rs`:
+
+```rust
+pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_OWNER_LEASE_TTL_SECS: i64 = 60;
+pub(crate) const DEFAULT_OPTIMISTIC_TXN_RETRIES: usize = 8;
+```
+
+Five seconds is generous for LAN and localhost connections but fast enough to surface misconfigurations during startup. Sixty seconds for the owner lease TTL balances two concerns: long enough that a brief network partition does not falsely expire ownership, short enough that a hard-killed worker releases its shards within a minute. Eight retries for optimistic transactions provides enough headroom for typical contention levels without spinning indefinitely on a hot key.
+
+### Construction Paths
+
+The primary constructor `new()` accepts endpoints and a namespace prefix, applying default tuning knobs. For callers that need explicit control, `new_with_tuning()` accepts all four parameters.
+
+From `config.rs`:
+
+```rust
+pub fn new<I, S>(
+    endpoints: I,
+    namespace_prefix: impl Into<String>,
+) -> Result<Self, EtcdCoordinatorConfigError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    Self::new_with_tuning(
+        endpoints,
+        namespace_prefix,
+        DEFAULT_OWNER_LEASE_TTL_SECS,
+        DEFAULT_OPTIMISTIC_TXN_RETRIES,
+    )
+}
+```
+
+Both constructors trim whitespace from every endpoint and the prefix before running validation. This normalization step matters in practice: endpoints read from environment variables or YAML config files often carry trailing whitespace or newlines that would otherwise cause silent connection failures.
+
+`from_endpoints_csv()` and `from_endpoints_csv_with_tuning()` split a comma-separated string for environment-variable-driven configuration (`ETCD_ENDPOINTS=http://host1:2379,http://host2:2379`). They silently drop segments that are empty after trimming, so trailing commas in environment variables do not cause validation failures.
+
+`localhost()` targets `http://127.0.0.1:2379` with prefix `/gossip/v1` and default tuning knobs for local development. It routes through `new()` so the hard-coded values stay in lockstep with the validation rules — if the rules ever change, the `expect` inside `localhost()` will panic at compile-test time rather than silently producing an invalid config. The `Default` implementation delegates to `localhost()`.
+
+From `config.rs`:
+
+```rust
+#[must_use]
+pub fn localhost() -> Self {
+    Self::new(["http://127.0.0.1:2379"], "/gossip/v1")
+        .expect("hard-coded localhost config must remain valid")
+}
+
+// ...
+
+impl Default for EtcdCoordinatorConfig {
+    fn default() -> Self {
+        Self::localhost()
+    }
+}
+```
+
+### Builder Methods for Auth and TLS
+
+Two builder methods layer optional concerns onto a validated config. `with_auth()` sets a username/password pair for etcd authentication. `with_tls()` (gated behind the `"tls"` feature) sets TLS options for encrypted connections. Both return `Self` with the `#[must_use]` attribute, enabling fluent chaining.
+
+From `config.rs`:
+
+```rust
+#[must_use]
+pub fn with_auth(mut self, user: impl Into<String>, password: impl Into<String>) -> Self {
+    self.auth = Some((user.into(), password.into()));
+    self
+}
+
+#[cfg(feature = "tls")]
+#[must_use]
+pub fn with_tls(mut self, tls: etcd_client::TlsOptions) -> Self {
+    self.tls = Some(tls);
+    self
+}
+```
+
+### Nine Validation Error Variants
+
+The `validate()` method enforces nine rules, each with a dedicated error variant. The seven original endpoint and prefix checks remain, and two new variants cover the persistence-tuning knobs.
 
 From `config.rs`:
 
@@ -57,16 +161,23 @@ pub fn validate(&self) -> Result<(), EtcdCoordinatorConfigError> {
     if self.namespace_prefix.contains("//") {
         return Err(EtcdCoordinatorConfigError::NamespacePrefixContainsDoubleSlash);
     }
+    if self.owner_lease_ttl_secs <= 0 {
+        return Err(EtcdCoordinatorConfigError::NonPositiveOwnerLeaseTtl);
+    }
+    if self.optimistic_txn_retries == 0 {
+        return Err(EtcdCoordinatorConfigError::ZeroOptimisticTxnRetries);
+    }
 
     Ok(())
 }
 ```
 
-The seven validation error variants map one-to-one with these checks.
+The full error enum:
 
 From `config.rs`:
 
 ```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EtcdCoordinatorConfigError {
     NoEndpoints,
     EmptyEndpoint { index: usize },
@@ -75,14 +186,16 @@ pub enum EtcdCoordinatorConfigError {
     NamespacePrefixMustStartWithSlash,
     NamespacePrefixMustNotEndWithSlash,
     NamespacePrefixContainsDoubleSlash,
+    NonPositiveOwnerLeaseTtl,
+    ZeroOptimisticTxnRetries,
 }
 ```
 
-Each variant carries just enough context to pinpoint the problem. `EmptyEndpoint` and `InvalidEndpointScheme` include the offending index so operators can identify which entry in a multi-endpoint list is wrong. The `NoEndpoints` variant catches the case where an empty list is passed — this is distinct from passing a list with blank entries. The namespace prefix rules prevent two classes of bugs: a prefix without a leading slash would produce keys that are not absolute etcd paths, and a prefix with a trailing slash would produce double slashes when child segments are appended. The `NamespacePrefixContainsDoubleSlash` variant guards against prefixes like `/gossip//v1` that would create invisible empty path segments in the etcd keyspace — segments that are difficult to debug with `etcdctl` because they appear identical to the intended path in most terminal output.
+`EmptyEndpoint` and `InvalidEndpointScheme` include the offending index so operators can identify which entry in a multi-endpoint list is wrong. The namespace prefix rules prevent two classes of bugs: a prefix without a leading slash would produce keys that are not absolute etcd paths, and a prefix with a trailing slash would produce double slashes when child segments are appended. `NamespacePrefixContainsDoubleSlash` guards against prefixes like `/gossip//v1` that would create invisible empty path segments in the etcd keyspace. `NonPositiveOwnerLeaseTtl` catches zero or negative values — the TTL is an `i64` because the etcd client API uses signed seconds, but a non-positive TTL is meaningless. `ZeroOptimisticTxnRetries` ensures at least one attempt is made for every CAS transaction.
 
 ### Credential Redaction in Debug Output
 
-Endpoint URIs can contain embedded credentials (e.g., `http://user:pass@etcd-0:2379`). The `Debug` implementation strips the userinfo portion before rendering, so credentials never leak into logs or diagnostic output.
+Endpoint URIs can contain embedded credentials (e.g., `http://user:pass@etcd-0:2379`). The `Debug` implementation strips the userinfo portion before rendering, so credentials never leak into logs or diagnostic output. Authentication credentials and TLS configuration are also redacted.
 
 From `config.rs`:
 
@@ -102,17 +215,23 @@ impl fmt::Debug for EtcdCoordinatorConfig {
         }
 
         let redacted: Vec<String> = self.endpoints.iter().map(|e| redact_endpoint(e)).collect();
-        f.debug_struct("EtcdCoordinatorConfig")
-            .field("endpoints", &redacted)
+        let mut s = f.debug_struct("EtcdCoordinatorConfig");
+        s.field("endpoints", &redacted)
             .field("namespace_prefix", &self.namespace_prefix)
-            .finish()
+            .field("owner_lease_ttl_secs", &self.owner_lease_ttl_secs)
+            .field("optimistic_txn_retries", &self.optimistic_txn_retries);
+        if let Some((user, _)) = &self.auth {
+            s.field("auth_user", user);
+            s.field("auth_password", &"[REDACTED]");
+        }
+        #[cfg(feature = "tls")]
+        s.field("tls", &self.tls.as_ref().map(|_| "[configured]"));
+        s.finish()
     }
 }
 ```
 
-An endpoint `http://admin:secret@etcd-0:2379` renders as `http://***@etcd-0:2379`. Endpoints without userinfo pass through unchanged. This is security-by-default: a developer who writes `tracing::debug!(?config)` never accidentally exposes credentials.
-
-Two convenience constructors cover common cases. `localhost()` targets `http://127.0.0.1:2379` with prefix `/gossip/v1` for local development. It routes through `new()` so the hard-coded values stay in lockstep with the validation rules — if the rules ever change, the `expect` inside `localhost()` will panic at compile-test time rather than silently producing an invalid config. `from_endpoints_csv()` splits a comma-separated string for environment-variable-driven configuration (`ETCD_ENDPOINTS=http://host1:2379,http://host2:2379`). It silently drops segments that are empty after trimming, so trailing commas in environment variables do not cause validation failures.
+An endpoint `http://admin:secret@etcd-0:2379` renders as `http://***@etcd-0:2379`. The auth password is always `[REDACTED]`. TLS presence renders as `[configured]` without exposing certificate material. This is security-by-default: a developer who writes `tracing::debug!(?config)` never accidentally exposes credentials.
 
 ## The etcd Keyspace
 
@@ -128,6 +247,19 @@ pub struct EtcdKeyspace {
 ```
 
 Construction validates the same prefix invariants as `EtcdCoordinatorConfig`: must start with `/`, must not end with `/` (unless it is exactly `"/"`), must not contain consecutive slashes, and must not be empty. The `EtcdKeyspace` has its own error type, `EtcdKeyspaceError`, with four variants mirroring these rules. The duplication is intentional: the config validates the user's input at the API boundary, and the keyspace validates the prefix at the storage boundary. If the config and keyspace are constructed independently (e.g., from different code paths), both boundaries remain protected.
+
+From `keyspace.rs`:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EtcdKeyspaceError {
+    EmptyPrefix,
+    PrefixMustStartWithSlash,
+    PrefixMustNotEndWithSlash,
+    PrefixContainsDoubleSlash,
+}
+```
 
 ### Hierarchical Key Layout
 
@@ -210,6 +342,23 @@ fn encode_hex_into(buf: &mut String, bytes: &[u8]) {
 }
 ```
 
+The `join_namespace_into` helper handles the root prefix (`"/"`) as a special case: joining `"/"` with `"tenants"` produces `"/tenants"`, not `"//tenants"`.
+
+From `keyspace.rs`:
+
+```rust
+fn join_namespace_into(&self, buf: &mut String, suffix: &str) {
+    debug_assert!(!suffix.starts_with('/'));
+    if self.prefix == "/" {
+        buf.push('/');
+    } else {
+        buf.push_str(&self.prefix);
+        buf.push('/');
+    }
+    buf.push_str(suffix);
+}
+```
+
 ## The Binary Codec
 
 Coordination records must be persisted as etcd values with deterministic round-trip fidelity. A record encoded and then decoded must produce an identical record, byte for byte, field for field. The codec is hand-written rather than serde-derived so that every byte is explicit and the decode path can interleave validation with field reads — rejecting malformed blobs early without wasted allocation. A serde-based approach would deserialize first and validate second, meaning a corrupted blob could trigger arbitrary allocation before validation even begins. The hand-written codec rejects invalid data at the earliest possible byte.
@@ -228,14 +377,61 @@ const VERSION_PREFIX_V1: &[u8; 2] = b"v1";
 pub enum BlobKind {
     RunRecord = 1,
     ShardRecord = 2,
+    ShardOwner = 3,
 }
 ```
 
-The header layout is `[version: 2 bytes ("v1")] [kind: 1 byte (BlobKind discriminant)]`. After the header, fields are encoded sequentially in little-endian byte order with no alignment padding. Variable-length fields (byte slices, vectors) are length-prefixed with a `u32` count. Optional fields use a 1-byte bool presence tag (`0` = absent, `1` = present). Enum discriminants are encoded as raw `u8` values matching each type's `as_u8()` representation.
+The header layout is `[version: 2 bytes ("v1")] [kind: 1 byte (BlobKind discriminant)]`. Three blob kinds exist: `RunRecord` for serialized run records, `ShardRecord` for serialized shard records, and `ShardOwner` for the owner-key binding that lives under each shard's `/owner` key in the etcd keyspace. After the header, fields are encoded sequentially in little-endian byte order with no alignment padding. Variable-length fields (byte slices, vectors) are length-prefixed with a `u32` count. Optional fields use a 1-byte bool presence tag (`0` = absent, `1` = present). Enum discriminants are encoded as raw `u8` values matching each type's `as_u8()` representation.
 
 The encoding primitives are symmetric pairs. Each `put_*` function on the encode side has a matching `read_*` method on the `Decoder`. For example, `put_u64` writes 8 little-endian bytes, and `read_u64` reads 8 bytes and reconstructs the `u64`. `put_bytes` writes a `u32` length followed by the raw bytes, and `read_vec` reads the length, bounds-checks it against `MAX_FIELD_SIZE` (1 MiB), then reads that many bytes. `put_opt_u64` writes a 1-byte presence tag followed by the value if present, and `read_opt_u64` reads the tag and conditionally reads the value. This symmetry makes the codec self-documenting: reading the encode function reveals the exact wire layout.
 
-### Encoding
+### Owner Key Codec
+
+The `ShardOwner` blob kind is specific to the shard ownership mechanism. Each shard's `/owner` key in the etcd keyspace stores a binding of worker identity to fence epoch. The `OwnerLeaseValue` struct captures this pair:
+
+From `codec.rs`:
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnerLeaseValue {
+    pub worker: WorkerId,
+    pub fence: FenceEpoch,
+}
+```
+
+The encode and decode functions for owner values are compact — just the 3-byte header followed by two `u64` fields:
+
+From `codec.rs`:
+
+```rust
+pub fn encode_owner_value(worker: WorkerId, fence: FenceEpoch) -> Vec<u8> {
+    let mut out = Vec::with_capacity(3 + 16);
+    out.extend_from_slice(VERSION_PREFIX_V1);
+    out.push(BlobKind::ShardOwner.as_u8());
+    put_u64(&mut out, worker.as_raw());
+    put_u64(&mut out, fence.as_raw());
+    out
+}
+
+pub fn decode_owner_value(bytes: &[u8]) -> Result<OwnerLeaseValue, EtcdCodecError> {
+    let mut decoder = Decoder::new(bytes);
+    decoder.expect_header(BlobKind::ShardOwner)?;
+    let worker = WorkerId::from_raw(decoder.read_u64()?);
+    let fence = FenceEpoch::from_raw(decoder.read_u64()?);
+    if fence < FenceEpoch::INITIAL {
+        return Err(EtcdCodecError::InvariantViolation {
+            kind: "OwnerLeaseValue",
+            detail: "fence must be >= INITIAL",
+        });
+    }
+    decoder.finish()?;
+    Ok(OwnerLeaseValue { worker, fence })
+}
+```
+
+The decode path validates that the fence epoch is at least `FenceEpoch::INITIAL` — a sub-initial fence would indicate a corrupted or fabricated owner key. The `finish()` call rejects any trailing bytes, guarding against appended garbage. This owner value is the payload that the backend's CAS transactions compare and swap when claiming or fencing shard ownership. Chapter 14 covers how these transactions work in practice.
+
+### Run Record and Shard Record Encoding
 
 Encoding converts a domain `RunRecord` or `ShardRecord` into its owned intermediate, then writes the header followed by all fields in deterministic order.
 
@@ -252,7 +448,7 @@ pub fn encode_run_record(record: &RunRecord) -> Vec<u8> {
 }
 ```
 
-Shard encoding reads pooled fields from the caller's `ByteSlab` to extract byte content. The slab is borrowed immutably — no allocations occur during encoding. Unlike `encode_run_record`, shard encoding is fallible: it returns `Result` because the `OwnedShardRecord::encode_into` method validates the lease invariant (owner and deadline must be jointly present or absent) and returns `EtcdCodecError::InvariantViolation` on mismatch.
+Shard encoding reads pooled fields from the caller's `ByteSlab` to extract byte content. The slab is borrowed immutably — no allocations occur during encoding. Unlike `encode_run_record`, shard encoding is fallible: it returns `Result` because `OwnedShardRecord::encode_into` validates the lease invariant (owner and deadline must be jointly present or absent) and returns `EtcdCodecError::InvariantViolation` on mismatch.
 
 From `codec.rs`:
 
@@ -272,9 +468,7 @@ pub fn encode_shard_record(
 
 ### Two-Phase Decode: Parse then Materialize
 
-Decoding proceeds in two distinct phases. First, the blob is parsed into heap-owned intermediates (`OwnedRunRecord`, `OwnedShardRecord`) that hold all decoded values in plain `Vec<u8>` and `Vec<ShardId>` form. Structural validation happens immediately during this phase.
-
-Second, materialization converts the owned intermediates into domain types. For `RunRecord` this is a relatively cheap operation: it constructs a `RunConfig` from flat fields and populates a `RingBuffer` op log. For `ShardRecord` it allocates pooled fields (`PooledShardSpec`, `PooledCursor`, `PooledSpawned`) into the caller's `ByteSlab`. This second phase is where the slab-backed allocation model creates complexity — and where the strong exception guarantee becomes essential.
+Decoding proceeds in two distinct phases. First, the blob is parsed into heap-owned intermediates (`OwnedRunRecord`, `OwnedShardRecord`) that hold all decoded values in plain `Vec<u8>` and `Vec<ShardId>` form. Structural validation happens immediately during this phase. Second, materialization converts the owned intermediates into domain types. For `RunRecord` this is a relatively cheap operation: it constructs a `RunConfig` from flat fields and populates a `RingBuffer` op log. For `ShardRecord` it allocates pooled fields (`PooledShardSpec`, `PooledCursor`, `PooledSpawned`) into the caller's `ByteSlab`. This second phase is where the slab-backed allocation model creates complexity — and where the strong exception guarantee becomes essential.
 
 From `codec.rs`:
 
@@ -352,6 +546,8 @@ The codec defines 12 error variants covering every failure mode from truncated i
 From `codec.rs`:
 
 ```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EtcdCodecError {
     Truncated { needed: usize, remaining: usize },
     InvalidVersionPrefix { actual: [u8; 2] },
@@ -388,188 +584,65 @@ if root_len > decoder.remaining() / SHARD_ID_WIRE_SIZE {
 
 This prevents a crafted `u32` length prefix from triggering a multi-GB `Vec::with_capacity` allocation. The same pattern appears for spawned children (`MAX_SPAWNED_PER_SHARD`), op log entries (`OP_LOG_CAP`), and byte vectors (`MAX_FIELD_SIZE = 1 MiB`).
 
-## The EtcdCoordinator Struct
-
-The backend struct ties configuration, keyspace, runtime, client, and protocol delegate together into a single unit that is constructed once and reused for the lifetime of the coordinator process.
-
-From `backend.rs`:
-
-```rust
-pub struct EtcdCoordinator {
-    config: EtcdCoordinatorConfig,
-    keyspace: EtcdKeyspace,
-    runtime: tokio::runtime::Runtime,
-    client: etcd_client::Client,
-    protocol_delegate: InMemoryCoordinator,
-}
-```
-
-The `runtime` field is a current-thread Tokio runtime that bridges the synchronous coordination traits to the async etcd client. The coordination traits are deliberately synchronous (they return `Result<T, E>`, not futures) because the deterministic simulator cannot use an async runtime. The `client` field holds a live gRPC connection to the etcd cluster. The `protocol_delegate` is an `InMemoryCoordinator` that holds all shard and run state.
-
-Five fields, each with a distinct responsibility: `config` remembers the validated connection parameters, `keyspace` builds keys, `runtime` bridges sync-to-async, `client` talks to etcd, and `protocol_delegate` implements protocol logic.
-
-### Connection and Health Check
-
-The `connect()` constructor performs a two-phase fail-fast initialization:
-
-From `backend.rs`:
-
-```rust
-pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .map_err(EtcdCoordinatorError::RuntimeBuild)?;
-
-    let endpoints = config.endpoints().to_vec();
-    let connect_opts =
-        etcd_client::ConnectOptions::new().with_connect_timeout(DEFAULT_CONNECT_TIMEOUT);
-
-    debug_assert!(
-        tokio::runtime::Handle::try_current().is_err(),
-        "connect() must not be called from within an active Tokio runtime"
-    );
-
-    let mut client = runtime
-        .block_on(etcd_client::Client::connect(endpoints, Some(connect_opts)))
-        .map_err(|source| EtcdCoordinatorError::Etcd {
-            operation: EtcdOperation::Connect,
-            source,
-        })?;
-
-    runtime
-        .block_on(client.status())
-        .map_err(|source| EtcdCoordinatorError::Etcd {
-            operation: EtcdOperation::Status,
-            source,
-        })?;
-
-    let keyspace = EtcdKeyspace::new(config.namespace_prefix())?;
-
-    Ok(Self {
-        config,
-        keyspace,
-        runtime,
-        client,
-        protocol_delegate: InMemoryCoordinator::new(DEFAULT_BOOTSTRAP_LEASE_DURATION),
-    })
-}
-```
-
-First, it establishes a gRPC channel with a 5-second connect timeout (`DEFAULT_CONNECT_TIMEOUT`). Five seconds is generous for LAN and localhost connections but fast enough to surface misconfigurations during startup — a firewall-dropped packet or wrong host will fail in 5 seconds rather than hanging indefinitely. Then it round-trips a maintenance `Status` RPC to confirm the cluster is reachable and responsive. This two-step sequence means that `connect()` returning `Ok` guarantees a validated config, a live network connection, and a responsive etcd cluster.
-
-The `debug_assert!` catches accidental use from within an existing Tokio runtime — nested `block_on` panics at runtime, and this assertion surfaces the mistake during development. The struct-level documentation makes this constraint explicit: callers must invoke trait methods from synchronous code only.
-
-The `InMemoryCoordinator` is bootstrapped with a 30-second lease duration (`DEFAULT_BOOTSTRAP_LEASE_DURATION`). This default applies to the in-memory delegate and controls how long a shard lease remains valid before requiring renewal.
-
-### Debug Output
-
-The `Debug` implementation omits the etcd client (which does not implement `Debug`) and the Tokio runtime. It shows the endpoint count rather than raw URIs to avoid credential leakage.
-
-From `backend.rs`:
-
-```rust
-impl fmt::Debug for EtcdCoordinator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EtcdCoordinator")
-            .field("endpoint_count", &self.config.endpoints().len())
-            .field("namespace_prefix", &self.keyspace.prefix())
-            .field(
-                "coordination_storage_mode",
-                &"delegated to InMemoryCoordinator",
-            )
-            .finish()
-    }
-}
-```
-
-## Why Delegate to InMemoryCoordinator
-
-Every `CoordinationBackend`, `RunManagement`, and `ShardClaiming` trait method on `EtcdCoordinator` is a direct forwarding call to `self.protocol_delegate`.
-
-From `backend.rs`:
-
-```rust
-impl CoordinationBackend for EtcdCoordinator {
-    fn acquire_and_restore_into<'a>(
-        &mut self,
-        now: LogicalTime,
-        tenant: TenantId,
-        key: ShardKey,
-        worker: WorkerId,
-        out: &'a mut AcquireScratch,
-    ) -> Result<AcquireResultView<'a>, AcquireError> {
-        self.protocol_delegate
-            .acquire_and_restore_into(now, tenant, key, worker, out)
-    }
-
-    // ... all other methods follow the same pattern
-}
-```
-
-This delegation architecture exists for a specific reason: the `InMemoryCoordinator` is the simulation-tested, TLA+-verified reference implementation. Its shard lifecycle, lease fencing, idempotency dedup, cursor persistence, and split logic have been exhaustively validated through deterministic simulation at multiple fault levels. By delegating to it, the etcd backend inherits all of that correctness without re-implementing any protocol semantics.
-
-This design also means that the etcd backend does not need its own protocol-level test suite. The coordination protocol is tested once in `gossip-coordination`, and every backend that delegates to `InMemoryCoordinator` gets that coverage for free. The etcd-specific tests focus on what the etcd layer adds: configuration validation, keyspace construction, and codec round-trip fidelity.
-
-The etcd layer handles a different set of concerns: connection management, key encoding, binary serialization, and health checking. The keyspace and codec modules are fully built and tested. The remaining work is wiring etcd read/write operations into the trait methods so that each mutation becomes a transactional etcd write and each query reconstructs domain types from stored blobs — making state survive process restarts.
-
-The `ShardClaiming` trait combines `CoordinationBackend` and `RunManagement` (they are its supertraits). Its single method, `claim_next_available`, queries run state for claimable shards and then acquires one — both steps delegated to the in-memory coordinator. Because all three traits are implemented through delegation, a caller holding an `&mut EtcdCoordinator` can use it anywhere a `&mut dyn ShardClaiming` is expected, with identical behavior to the in-memory backend.
-
-From `backend.rs`:
-
-```rust
-impl ShardClaiming for EtcdCoordinator {
-    fn claim_next_available<'a>(
-        &mut self,
-        now: LogicalTime,
-        tenant: TenantId,
-        run: RunId,
-        worker: WorkerId,
-        out: &'a mut AcquireScratch,
-    ) -> Result<AcquireResultView<'a>, ClaimError> {
-        self.protocol_delegate
-            .claim_next_available(now, tenant, run, worker, out)
-    }
-}
-```
-
 ## Error Taxonomy
 
-The `EtcdCoordinatorError` enum captures failures at each stage of the connection and operation lifecycle.
+The `error` module defines two types that cover all infrastructure failure modes. `EtcdOperation` labels which RPC or codec stage failed. `EtcdCoordinatorError` captures the top-level error with its source chain.
 
-From `error.rs`:
-
-```rust
-pub enum EtcdCoordinatorError {
-    Config(EtcdCoordinatorConfigError),
-    RuntimeBuild(std::io::Error),
-    Etcd {
-        operation: EtcdOperation,
-        source: etcd_client::Error,
-    },
-    Keyspace(EtcdKeyspaceError),
-}
-```
-
-The four variants form a progression that mirrors the `connect()` sequence:
-
-1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which constraint was violated.
-2. **`RuntimeBuild`** — the Tokio current-thread runtime could not be created. This is a system-resource failure (fd limits, thread limits) that prevents the sync/async bridge from starting.
-3. **`Etcd`** — a gRPC call failed. The `operation` field identifies which RPC (`Connect` or `Status`), and `source` carries the upstream `etcd_client::Error` with transport and cluster-level details.
-4. **`Keyspace`** — the namespace prefix could not be converted into a valid keyspace builder.
+### Operation Discriminant
 
 From `error.rs`:
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EtcdOperation {
     Connect,
     Status,
+    Get,
+    Put,
+    Delete,
+    Txn,
+    LeaseGrant,
+    LeaseKeepAlive,
+    LeaseRevoke,
 }
 ```
 
-`From` impls enable `?` propagation from config validation and keyspace construction inside `connect()`. This is a standard Rust pattern for error conversion, but it matters here because `connect()` calls both `EtcdCoordinatorConfig::validate()` (which returns `EtcdCoordinatorConfigError`) and `EtcdKeyspace::new()` (which returns `EtcdKeyspaceError`). The `From` impls let both error types convert to `EtcdCoordinatorError` through the `?` operator, keeping the `connect()` implementation clean:
+Nine variants cover the full surface of etcd interactions. `Connect` and `Status` are used during startup. `Get`, `Put`, `Delete`, and `Txn` cover the key-value operations that the backend executes during coordination. `LeaseGrant`, `LeaseKeepAlive`, and `LeaseRevoke` cover the lease lifecycle that backs shard owner key TTLs. Each variant has a display string that appears in error messages (e.g., "etcd lease_grant operation failed: ..."), providing structured context for diagnostics without embedding the full error chain in the variant name.
+
+### Top-Level Coordinator Errors
+
+From `error.rs`:
+
+```rust
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum EtcdCoordinatorError {
+    Config(EtcdCoordinatorConfigError),
+    Keyspace(EtcdKeyspaceError),
+    RuntimeBuild(std::io::Error),
+    Codec {
+        operation: EtcdOperation,
+        source: EtcdCodecError,
+    },
+    Etcd {
+        operation: EtcdOperation,
+        source: etcd_client::Error,
+    },
+}
+```
+
+Five variants form a progression that mirrors the backend's lifecycle:
+
+1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the nine constraints was violated.
+2. **`Keyspace`** — the namespace prefix could not be converted into a valid keyspace builder.
+3. **`RuntimeBuild`** — the Tokio current-thread runtime could not be created. This is a system-resource failure (fd limits, thread limits) that prevents the sync/async bridge from starting.
+4. **`Codec`** — a v1 blob failed to encode or decode during the given operation. This variant pairs the `EtcdOperation` that triggered the codec call with the `EtcdCodecError` source, preserving both "what were we doing" and "what went wrong with the bytes" in a single error.
+5. **`Etcd`** — a gRPC call failed. The `operation` field identifies which RPC (any of the nine `EtcdOperation` variants), and `source` carries the upstream `etcd_client::Error` with transport and cluster-level details.
+
+The `Codec` variant is a notable addition: because the backend implements coordination directly against etcd, codec failures can occur during any operation that reads or writes record blobs. The operation tag identifies whether the codec error happened during a `Get` (decode failure on a read), a `Put` (encode failure before a write), or a `Txn` (decode or encode failure during a compare-and-swap).
+
+`From` impls enable `?` propagation from config validation and keyspace construction:
 
 From `error.rs`:
 
@@ -587,22 +660,36 @@ impl From<EtcdKeyspaceError> for EtcdCoordinatorError {
 }
 ```
 
-The full `Error` trait implementation chains sources properly, so `anyhow` and `eyre` can walk the error chain for diagnostics. Every variant reports its inner error through `source()`, producing stack traces like "invalid etcd coordinator config: etcd endpoint at index 2 has invalid scheme (expected http:// or https://)" that pinpoint the exact failure without requiring a debugger.
+The full `Error` trait implementation chains sources properly, so `anyhow` and `eyre` can walk the error chain for diagnostics. Every variant reports its inner error through `source()`, producing stack traces like "etcd lease_grant operation failed: connection refused" that pinpoint the exact failure without requiring a debugger.
 
 ## The Public API Surface
 
-The crate's `lib.rs` re-exports a carefully curated set of types. The public API includes `EtcdCoordinator` (the backend), `EtcdCoordinatorConfig` and its error type (configuration), `EtcdKeyspace` and its error type (key construction), the codec's public functions and types (`encode_run_record`, `decode_run_record`, `encode_shard_record`, `decode_shard_record`, `BlobKind`, `EtcdCodecError`), and the coordinator error types (`EtcdCoordinatorError`, `EtcdOperation`). Internal details — the `Decoder` struct, the `OwnedRunRecord` and `OwnedShardRecord` intermediates, the encoding primitives, the `StagedShardAllocations` guard — remain private. This boundary ensures that callers depend on stable semantics (encode, decode, connect, use traits) without coupling to implementation details that may change as the etcd write path is wired up.
+The crate's `lib.rs` re-exports a carefully curated set of types. The public API includes `EtcdCoordinator` (the backend), `EtcdCoordinatorConfig` and its error type (configuration), `EtcdKeyspace` and its error type (key construction), the codec's public functions and types (`encode_run_record`, `decode_run_record`, `encode_shard_record`, `decode_shard_record`, `encode_owner_value`, `decode_owner_value`, `BlobKind`, `OwnerLeaseValue`, `EtcdCodecError`), and the coordinator error types (`EtcdCoordinatorError`, `EtcdOperation`).
+
+From `lib.rs`:
+
+```rust
+pub use backend::EtcdCoordinator;
+pub use codec::{
+    BlobKind, EtcdCodecError, OwnerLeaseValue, decode_owner_value, decode_run_record,
+    decode_shard_record, encode_owner_value, encode_run_record, encode_shard_record,
+};
+pub use config::{EtcdCoordinatorConfig, EtcdCoordinatorConfigError};
+pub use error::{EtcdCoordinatorError, EtcdOperation};
+pub use keyspace::{EtcdKeyspace, EtcdKeyspaceError};
+```
+
+Internal details — the `Decoder` struct, the `OwnedRunRecord` and `OwnedShardRecord` intermediates, the encoding primitives, the `StagedShardAllocations` guard — remain private. This boundary ensures that callers depend on stable semantics (encode, decode, connect, use traits) without coupling to implementation details.
 
 ## Summary
 
 The `gossip-coordination-etcd` crate builds the complete infrastructure for durable coordination state:
 
-- **`EtcdCoordinatorConfig`** validates endpoints and namespace prefixes with 7 distinct error variants, redacts credentials in `Debug` output, and normalizes whitespace from environment-variable input.
-- **`EtcdKeyspace`** maps identity tuples to deterministic ASCII keys in a hierarchical layout designed for prefix scans. Sibling separation (`runs/` vs `runs_active/`) prevents cross-category scan pollution. The `_into` buffer-reuse pattern eliminates per-call allocation on hot paths.
-- **The binary codec** uses a 3-byte header (`"v1"` + `BlobKind` tag) followed by little-endian sequential fields. Two-phase decode (parse into owned intermediates, then materialize into domain types) separates wire concerns from domain construction. Slab allocation rollback provides a strong exception guarantee: the slab is unchanged on decode failure.
-- **`EtcdCoordinator`** connects to etcd with a 5-second timeout, health-checks via a `Status` RPC, and delegates all protocol semantics to `InMemoryCoordinator` — inheriting the full simulation-tested, TLA+-verified coordination logic.
-- **`EtcdCoordinatorError`** covers the full failure progression from config validation through runtime construction to gRPC errors.
+- **`EtcdCoordinatorConfig`** validates endpoints, namespace prefixes, owner lease TTL, and optimistic retry budget with 9 distinct error variants. It redacts credentials in `Debug` output, normalizes whitespace from environment-variable input, and provides builder methods for auth and TLS.
+- **`EtcdKeyspace`** maps identity tuples to deterministic ASCII keys in a hierarchical layout designed for prefix scans. Sibling separation (`runs/` vs `runs_active/`, `shards/` vs `shards_active/`) prevents cross-category scan pollution. The `_into` buffer-reuse pattern eliminates per-call allocation on hot paths.
+- **The binary codec** uses a 3-byte header (`"v1"` + `BlobKind` tag) followed by little-endian sequential fields. Three blob kinds cover run records, shard records, and owner-key bindings. Two-phase decode (parse into owned intermediates, then materialize into domain types) separates wire concerns from domain construction. Slab allocation rollback provides a strong exception guarantee: the slab is unchanged on decode failure. The `OwnerLeaseValue` codec gives the backend a compact, validated representation of shard ownership for CAS transactions.
+- **`EtcdCoordinatorError`** covers the full failure progression from config validation through runtime construction to codec failures and gRPC errors, with 9 `EtcdOperation` variants labeling every possible failure site.
 
 ## What's Next
 
-The delegation model means the etcd backend has the correct trait surface but does not yet persist state across restarts. The next step is wiring the keyspace and codec into the trait methods: each mutation becomes an etcd transaction that atomically updates record keys and active indexes, and each read reconstructs domain types from stored blobs. When that wiring is complete, the coordinator survives restarts — and the 50,000 shards that were mid-scan resume from their last checkpointed cursors instead of starting over.
+The infrastructure layers are in place: validated configuration with tuning knobs for CAS retries and lease TTLs, a deterministic keyspace that maps every coordination entity to an etcd key, a versioned binary codec that serializes records and owner-key bindings with round-trip fidelity, and a structured error taxonomy covering every failure mode. Chapter 14 covers how `EtcdCoordinator` uses these primitives to implement the coordination protocol directly against etcd — CAS transactions for fenced mutations, owner key fencing with `OwnerLeaseValue` payloads, lease-backed TTLs for automatic ownership expiry, and optimistic retry loops bounded by the configured retry budget. The backend does not delegate to `InMemoryCoordinator`. Every coordination operation reads from etcd, mutates through transactions, and writes back to etcd. When a coordinator process restarts, the 50,000 shards that were mid-scan resume from their last checkpointed cursors instead of starting over.

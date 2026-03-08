@@ -8,7 +8,7 @@
 
 The failure above is a test infrastructure bug, not a connector logic bug. The enumeration algorithm itself is correct -- it is the input that violated an assumption (unique keys). Catching this class of error requires a connector that is fully deterministic: same input, same output, every time. No network latency, no API rate limits, no eventual consistency, no filesystem race conditions.
 
-The `InMemoryDeterministicConnector` in the `gossip-connectors` crate serves this purpose. It implements the full connector trait surface -- `EnumerationConnector` and `ReadConnector` -- using sorted in-memory arrays. All BLAKE3 hashing is done once at construction. Subsequent page emissions use the pooled page assembly path: item keys, item refs, and optional token bytes are staged into a page-local `ByteSlab`, then materialized via `ItemKey::try_from_slot`, `ItemRef::try_from_slot`, and token construction from slots. This incurs one copy per staged field but keeps wrapper cloning allocation-free in the HOT page-emission loop. The page's cursor and items share the same slab owner (`PooledByteSlab`), so returning either one by value keeps pooled bytes valid until the last clone is dropped. The connector is designed for unit tests, conformance harnesses, and simulation workloads where reproducibility matters more than source realism.
+The `InMemoryDeterministicConnector` in the `gossip-connectors` crate serves this purpose. It provides the full connector API surface -- enumeration, read, and split-point methods -- using sorted in-memory arrays. All BLAKE3 hashing is done once at construction. Subsequent page emissions use the pooled page assembly path: item keys, item refs, and optional token bytes are staged into a page-local `ByteSlab`, then materialized via `ItemKey::try_from_slot`, `ItemRef::try_from_slot`, and token construction from slots. This incurs one copy per staged field but keeps wrapper cloning allocation-free in the HOT page-emission loop. The page's cursor and items share the same slab owner (`PooledByteSlab`), so returning either one by value keeps pooled bytes valid until the last clone is dropped. The connector is designed for unit tests, conformance harnesses, and simulation workloads where reproducibility matters more than source realism.
 
 The traits from Chapter 3 define the interface this connector implements. The `ItemKey`, `ScanItem`, and `Budgets` from Chapter 2 are the concrete types flowing through the enumeration.
 
@@ -26,7 +26,7 @@ Here is the definition from `in_memory.rs`:
 pub struct MemItem {
     /// Item key used for lexicographic ordering and cursor progression.
     pub key: ItemKey,
-    /// Immutable payload returned by [`ReadConnector`] operations.
+    /// Immutable payload returned by read operations.
     ///
     /// Wrapped in `Arc` to keep fixture duplication cheap.
     pub bytes: Arc<[u8]>,
@@ -75,7 +75,7 @@ Here is the definition from `in_memory.rs`:
 struct PreparedItem {
     /// Sorted item key for ordering and cursor progression.
     key: ItemKey,
-    /// Immutable payload bytes for [`ReadConnector`] operations.
+    /// Immutable payload bytes for read operations.
     bytes: Arc<[u8]>,
     /// Big-endian `u64` index into the sorted item array.
     item_ref: ItemRef,
@@ -91,7 +91,7 @@ struct PreparedItem {
 Field-by-field breakdown:
 
 - **`key: ItemKey`** -- Carried forward from the input `MemItem`. Used for binary search during shard-bound resolution and cursor advancement.
-- **`bytes: Arc<[u8]>`** -- The shared content payload. Carried forward unchanged; the `ReadConnector` implementation returns a reader over these bytes.
+- **`bytes: Arc<[u8]>`** -- The shared content payload. Carried forward unchanged; the `open` method returns a reader over these bytes.
 - **`item_ref: ItemRef`** -- A big-endian `u64` encoding of this item's index in the sorted array. Item 0 gets `ItemRef([0,0,0,0,0,0,0,0])`, item 1 gets `ItemRef([0,0,0,0,0,0,0,1])`, and so on. This makes `ItemRef` values compact, deterministic, and decodable back to an index in O(1).
 - **`stable_item_id: StableItemId`** -- A domain-separated BLAKE3 hash of `(connector_tag, connector_instance_hash, key)`. Computed via the shared `derive_stable_item_id` helper in `common.rs`. The connector tag and connector instance hash ensure that the same key from different connectors or different connector instances produces distinct identity hashes.
 - **`version_id: ObjectVersionId`** -- A domain-separated BLAKE3 hash of the content bytes. Computed via `ObjectVersionId::from_version_bytes`. This is the content-addressed version fingerprint: if the bytes change, the version ID changes.
@@ -443,25 +443,23 @@ Here is the definition from `in_memory.rs`:
 
 The split-point selection delegates range resolution to `common::resolve_bounds` (which validates the range and maps key boundaries to indices) and cursor advancement to `common::key_resume_start`. It then calls `common::estimate_split_from_sorted`, which feeds the entries into a `StreamingSplitEstimator` for byte-weighted median selection, and validates the candidate via `common::is_valid_split_candidate` (rejecting candidates that would not advance past the cursor or that fall at/beyond the upper bound).
 
-The `StreamingSplitEstimator` (defined in `split_estimator.rs`) uses reservoir sampling to maintain a fixed-size sample of `(key, size)` pairs, then estimates the byte-weighted median split point from that sample. This approach produces balanced shards even when object sizes are highly skewed -- a common scenario where a repository contains one 100 MB binary alongside thousands of 1 KB source files. Count-based splitting would put half the items on each side, but one side would hold nearly all the bytes. Byte-weighted splitting puts half the bytes on each side.
+The `StreamingSplitEstimator` (defined in `split_estimator.rs`) uses dual-axis stride-based sampling to maintain a fixed-size sample of `(key, size)` pairs, then estimates the byte-weighted median split point from that sample. Each incoming entry is tested against both a *rank stride* and a *byte stride*; the entry is recorded when either cadence fires. When the sample buffer exceeds its cap, stride-doubling compaction halves the buffer via nearest-neighbor selection on the byte axis, then doubles both strides so future observations are sampled at the coarser cadence. This approach produces balanced shards even when object sizes are highly skewed -- a common scenario where a repository contains one 100 MB binary alongside thousands of 1 KB source files. Count-based splitting would put half the items on each side, but one side would hold nearly all the bytes. Byte-weighted splitting puts half the bytes on each side.
 
 ---
 
-## ReadConnector Implementation
+## Read Methods
 
 Here is the definition from `in_memory.rs`:
 
 ```rust
-impl ReadConnector for InMemoryDeterministicConnector {
+impl InMemoryDeterministicConnector {
     /// Returns a reader over the full item content.
     ///
     /// Budget enforcement is left to the runtime layer (which wraps the
     /// returned reader in a bounded adapter), consistent with the advisory
-    /// budget contract in [`ReadConnector`]. This matches [`read_range`]
+    /// budget contract. This matches [`read_range`](Self::read_range)
     /// semantics, which also does not reject items based on total size.
-    ///
-    /// [`read_range`]: ReadConnector::read_range
-    fn open(
+    pub fn open(
         &mut self,
         item_ref: &ItemRef,
         _budgets: Budgets,
@@ -472,7 +470,7 @@ impl ReadConnector for InMemoryDeterministicConnector {
 
     /// Clamps the copy length to `min(dst.len(), max_bytes, available)` so
     /// the budget acts as an additional upper bound on bytes returned.
-    fn read_range(
+    pub fn read_range(
         &mut self,
         item_ref: &ItemRef,
         offset: u64,
@@ -505,7 +503,7 @@ impl ReadConnector for InMemoryDeterministicConnector {
 }
 ```
 
-The `open` method resolves the `ItemRef` to an index, clones the `Arc<[u8]>` content (a reference count bump, not a byte copy), and wraps it in an `io::Cursor`. The `Box<dyn io::Read + Send>` return type is required by the trait for object safety -- it allows callers to work with `dyn ReadConnector` at runtime. The heap allocation is acceptable on this WARM path (called once per item, not per byte).
+The `open` method resolves the `ItemRef` to an index, clones the `Arc<[u8]>` content (a reference count bump, not a byte copy), and wraps it in an `io::Cursor`. The `Box<dyn io::Read + Send>` return type provides a type-erased reader so callers can handle content from any connector uniformly. The heap allocation is acceptable on this WARM path (called once per item, not per byte).
 
 The `read_range` method provides random-access reads. Three safety guards protect against pathological inputs:
 
@@ -520,8 +518,8 @@ The `read_range` method provides random-access reads. Three safety guards protec
 Here is the definition from `in_memory.rs`:
 
 ```rust
-impl EnumerationConnector for InMemoryDeterministicConnector {
-    fn caps(&self) -> ConnectorCapabilities {
+impl InMemoryDeterministicConnector {
+    pub fn caps(&self) -> ConnectorCapabilities {
         ConnectorCapabilities {
             seek_by_key: true,
             token_resume: self.emit_tokens,
@@ -531,7 +529,7 @@ impl EnumerationConnector for InMemoryDeterministicConnector {
     }
 ```
 
-All four capability flags are `true` (with `token_resume` tracking the `emit_tokens` setting). This makes the in-memory connector the most capable connector in the system -- it supports every feature the connector traits define:
+All four capability flags are `true` (with `token_resume` tracking the `emit_tokens` setting). This makes the in-memory connector the most capable connector in the system -- it supports every feature the connector API defines:
 
 - **`seek_by_key: true`** -- The connector can resume enumeration from an arbitrary key position via binary search.
 - **`token_resume: self.emit_tokens`** -- When tokens are enabled, the connector emits and consumes big-endian index tokens for O(1) resume.
@@ -546,12 +544,12 @@ This full capability set is intentional for a test double: it exercises every co
 
 The `#[derive(Clone)]` on `InMemoryDeterministicConnector` produces a clone that bumps the `Arc<[PreparedItem]>` reference count (one atomic increment) and copies the `bool` field. The entire item array is shared, not copied. This matters in test harnesses that spawn multiple simulated workers, each needing their own mutable connector instance: cloning is effectively free regardless of dataset size.
 
-The trait methods take `&mut self` because the trait signatures require it, but no internal mutation occurs after construction. The `&mut self` requirement exists in the trait for connectors that maintain internal state (connection pools, rate limiter tokens, cursor caches). The in-memory connector has none of this, but it must satisfy the trait bound.
+The methods take `&mut self` for API uniformity with connectors that maintain internal state (connection pools, rate limiter tokens, cursor caches). The in-memory connector has no mutable state after construction, but the consistent signature keeps all connectors interchangeable at the call site.
 
 ---
 
 ## Summary
 
-The `InMemoryDeterministicConnector` is a test double that implements the full `EnumerationConnector` and `ReadConnector` trait surface using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes all metadata (BLAKE3 hashes, `ItemRef` indices, size hints) in a single O(n log n) pass. The connector takes a `connector_tag`, a `connector_instance_id`, and a `Vec<MemItem>`, deriving a `ConnectorInstanceIdHash` from the instance ID bytes for scoped identity derivation. The 5-phase enumeration algorithm in `enumerate_page_bounds` gates on budgets, validates ranges, resolves shard bounds via `lower_bound` binary search, advances past the cursor via an O(1) token fast path with O(log n) key fallback, and extracts pages from precomputed metadata with no further hashing. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical enumeration across runs for identical inputs.
+The `InMemoryDeterministicConnector` is a test double that provides the full connector API surface (enumeration, read, and split-point methods) using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes all metadata (BLAKE3 hashes, `ItemRef` indices, size hints) in a single O(n log n) pass. The connector takes a `connector_tag`, a `connector_instance_id`, and a `Vec<MemItem>`, deriving a `ConnectorInstanceIdHash` from the instance ID bytes for scoped identity derivation. The 5-phase enumeration algorithm in `enumerate_page_bounds` gates on budgets, validates ranges, resolves shard bounds via `lower_bound` binary search, advances past the cursor via an O(1) token fast path with O(log n) key fallback, and extracts pages from precomputed metadata with no further hashing. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical enumeration across runs for identical inputs.
 
 Chapter 7 applies these same patterns to a real filesystem, where lazy indexing, symlink security, and TOCTOU gaps introduce constraints the in-memory connector avoids.

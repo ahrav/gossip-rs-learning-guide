@@ -8,7 +8,7 @@
 
 Unit tests verify individual behaviors. A connector can pass hundreds of unit tests and still violate the enumeration contract in subtle ways -- off-by-one resume, duplicate keys across pages, tokens that silently drift from key-based positioning, or item references that accidentally leak credentials. These failures only surface when the connector interacts with the coordinator's checkpoint and resume machinery in production.
 
-The conformance harness in `crates/gossip-contracts/src/connector/conformance.rs` is a higher-order test framework that validates any `EnumerationConnector` implementation against the full enumeration contract. The page validation from Chapter 4 runs on every page collected by the harness. Both the in-memory connector (Chapter 6) and the filesystem connector (Chapter 7) must pass this harness. The harness accepts closures for connector construction and page enumeration, making it connector-agnostic: any type that can enumerate pages through a closure can be tested.
+The conformance harness in `crates/gossip-contracts/src/connector/conformance.rs` is a higher-order test framework that validates any connector implementation against the full enumeration contract. The page validation from Chapter 4 runs on every page collected by the harness. Both the in-memory connector (Chapter 6) and the filesystem connector (Chapter 7) must pass this harness. The harness accepts closures for connector construction and page enumeration, making it connector-agnostic: any type that can enumerate pages through a closure can be tested.
 
 ---
 
@@ -649,11 +649,11 @@ Because intermediate allocations are dropped between phases, peak working set is
 
 The harness accepts closures rather than trait objects for three reasons:
 
-1. **No test-only trait required.** Connectors implement `EnumerationConnector` and `ReadConnector`. The harness does not force them to implement a third "conformance-testable" trait. Any type that can be wired through closures is testable.
+1. **No test-only trait required.** Connectors provide enumeration and read methods as inherent methods. The harness does not force them to implement a third "conformance-testable" trait. Any type that can be wired through closures is testable.
 
 2. **Fresh instances per run.** The `make` closure is called once per run (baseline, rerun, each resume check). This guarantees that mutable state from one run (e.g., the filesystem connector's cached index) does not contaminate another. The filesystem connector's test demonstrates this: `|| make_conn(root.clone())` constructs a fresh `FilesystemConnector` for each invocation.
 
-3. **Flexible wiring.** The `enumerate_page` closure can adapt between the connector's method signature and the harness's expectations. The filesystem connector's `enumerate_page_range` takes explicit start/end keys, while the `ShardSpec`-based `enumerate_page` from the trait takes a shard reference. The closure captures the start/end keys and forwards them.
+3. **Flexible wiring.** The `enumerate_page` closure can adapt between the connector's method signature and the harness's expectations. The filesystem connector's `enumerate_page_range` takes explicit start/end keys, while the `ShardSpec`-based `enumerate_page` method takes a shard reference. The closure captures the start/end keys and forwards them.
 
 ---
 

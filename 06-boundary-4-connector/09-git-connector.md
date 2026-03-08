@@ -27,7 +27,7 @@ enumeration to tracked files only, matching what a developer would see with
 `git status`.
 
 The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~690 lines)
-implements both `EnumerationConnector` and `ReadConnector`. It indexes
+provides enumeration and read methods. It indexes
 tracked files via `git ls-files -z`, produces paginated enumeration pages
 from a sorted in-memory snapshot, and serves content reads through
 standard filesystem I/O with path traversal defenses.
@@ -344,8 +344,8 @@ read-time escapes where a symlink was created between indexing and reading.
 ## Capability Flags
 
 ```rust
-impl EnumerationConnector for GitConnector {
-    fn caps(&self) -> ConnectorCapabilities {
+impl GitConnector {
+    pub fn caps(&self) -> ConnectorCapabilities {
         ConnectorCapabilities {
             seek_by_key: true,
             token_resume: self.emit_tokens,
@@ -360,7 +360,7 @@ The full capability set, matching the in-memory and filesystem connectors.
 `token_resume` tracks `emit_tokens` so callers can test key-only resume by
 constructing with `with_tokens(false)`.
 
-The `ReadConnector` implementation provides both `open` (returning a
+The read methods provide both `open` (returning a
 `Box<dyn Read + Send>` wrapping `fs::File`) and `read_range` (using
 `file.seek(SeekFrom::Start(offset))` followed by `file.read`). Both methods
 delegate to `open_path_for_ref` for path resolution and containment checking.

@@ -30,7 +30,7 @@ The `gossip-contracts::connector::page_validator` module provides a pure
 validation function that checks every page against ten ordered invariants
 before the scan loop acts on it. The `ItemKey` ordering from Chapter 2 is
 the foundation these invariants enforce. Chapter 3's
-`EnumerationConnector::enumerate_page` produces the pages this validator
+Connector `enumerate_page` methods produce the pages this validator
 checks.
 
 ---

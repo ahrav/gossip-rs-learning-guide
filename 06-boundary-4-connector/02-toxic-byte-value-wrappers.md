@@ -1056,6 +1056,6 @@ deterministic simulation testing. `VersionId` tags content identifiers with
 `Strong` or `Weak` confidence semantics. `ConnectorInputError` provides a
 unified validation error surface across all these types.
 
-Chapter 3 shows how these types flow through the `EnumerationConnector` and
-`ReadConnector` traits, and how page validation catches invariant violations
+Chapter 3 shows how these types flow through connector `enumerate_page` and
+`open` methods, and how page validation catches invariant violations
 at the boundary between connectors and the coordination layer.

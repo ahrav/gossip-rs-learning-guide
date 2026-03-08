@@ -8,7 +8,7 @@
 
 The in-memory connector from Chapter 6 proves that the enumeration contract works for items held entirely in process memory. Production scanners need a connector that reads files from disk. This introduces three problems the in-memory connector does not face: symlinks can escape the scan root, filesystem state can change between enumeration and reading (TOCTOU), and the directory walk itself can be expensive enough to blow deadlines.
 
-The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` solves all three. It implements `EnumerationConnector` and `ReadConnector` over a rooted directory tree, applying symlink-aware traversal, component-by-component `openat` with `O_NOFOLLOW` at every step, and a streaming DFS walk with deadline enforcement. Chapter 6's in-memory connector shares the binary-search and byte-weighted-split utilities from `common.rs`; this chapter shows how the filesystem connector replaces those shared index-then-search primitives with a fundamentally different streaming architecture that trades snapshot isolation for bounded memory.
+The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` solves all three. It provides enumeration and read methods over a rooted directory tree, applying symlink-aware traversal, component-by-component `openat` with `O_NOFOLLOW` at every step, and a streaming DFS walk with deadline enforcement. Chapter 6's in-memory connector shares the binary-search and byte-weighted-split utilities from `common.rs`; this chapter shows how the filesystem connector replaces those shared index-then-search primitives with a fundamentally different streaming architecture that trades snapshot isolation for bounded memory.
 
 > **Platform availability:** `FilesystemConnector` is only available on Unix
 > (`#[cfg(unix)]`). The module relies on Unix-specific APIs: `openat` with
@@ -39,7 +39,7 @@ For a tree with 10 levels of nesting and 100 files per directory, the old model 
 
 Before examining the walk machinery, it is worth understanding how the connector handles non-fatal issues. Not every problem encountered during traversal is fatal -- symlinks, unreadable subdirectories, encoding failures, and special files (FIFOs, sockets, device nodes) are all skipped rather than aborting the walk. Each skipped entry produces a warning.
 
-Here is the definition from `filesystem.rs:136-141`:
+Here is the definition from `filesystem.rs:130-135`:
 
 ```rust
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub struct WalkWarning {
 
 The `path_digest` field stores a `ToxicDigest` rather than a raw `PathBuf` so that filesystem paths never leak into log-visible diagnostics. The digest is computed via `ToxicDigest::of_bytes(path.as_os_str().as_bytes())` at warning creation time. Convenience constructors `WalkWarning::io(path, op, err)` and `WalkWarning::skipped(path, reason)` handle this conversion internally.
 
-Warnings are capped at `max_warnings` (default 1024). Beyond the cap, only the overflow count is incremented via the `push_walk_warning` helper at `filesystem.rs:1142-1153`:
+Warnings are capped at `max_warnings` (default 1024). Beyond the cap, only the overflow count is incremented via the `push_walk_warning` helper at `filesystem.rs:1149-1160`:
 
 ```rust
 fn push_walk_warning(
@@ -80,7 +80,7 @@ This prevents pathological directories (e.g., a directory with 100,000 symlinks)
 
 The streaming DFS walk is built from four types that work together to yield globally sorted files one at a time. Understanding these types is essential before reading the connector itself.
 
-**`BufferedDirEntry`** (`filesystem.rs:186-189`) is the simplest -- one entry read from a directory, before any path encoding or metadata lookup:
+**`BufferedDirEntry`** (`filesystem.rs:180-183`) is the simplest -- one entry read from a directory, before any path encoding or metadata lookup:
 
 ```rust
 struct BufferedDirEntry {
@@ -89,7 +89,7 @@ struct BufferedDirEntry {
 }
 ```
 
-**`WalkFrame`** (`filesystem.rs:196-206`) represents one directory on the DFS stack. Its `entries` deque is pre-sorted (using `cmp_dir_entry`) when the directory is first opened, so popping from the front preserves per-directory order:
+**`WalkFrame`** (`filesystem.rs:190-199`) represents one directory on the DFS stack. Its `entries` deque is pre-sorted (using `cmp_dir_entry`) when the directory is first opened, so popping from the front preserves per-directory order:
 
 ```rust
 struct WalkFrame {
@@ -107,11 +107,12 @@ struct WalkFrame {
 
 The `next_child_index` field tracks how many entries have been consumed from this frame. This value is serialized into walk tokens for cursor resume (discussed later). The `entries_since_check` counter drives periodic deadline checks at a cadence of `DEADLINE_CHECK_INTERVAL` (512) entries, balancing responsiveness against `Instant::now()` syscall overhead.
 
-**`WalkQuery`** (`filesystem.rs:209-217`) bundles the parameters that stay constant across a single `next_file` call:
+**`WalkQuery`** (`filesystem.rs:208-216`) bundles the parameters that stay constant across a single `next_file` call:
 
 ```rust
 struct WalkQuery<'a> {
     root: &'a Path,
+    connector_instance: ConnectorInstanceIdHash,
     max_depth: usize,
     start: Option<&'a [u8]>,
     end: Option<&'a [u8]>,
@@ -120,7 +121,7 @@ struct WalkQuery<'a> {
 }
 ```
 
-**`WalkState`** (`filesystem.rs:255-271`) is the resumable DFS walker itself. This is the heart of the streaming model:
+**`WalkState`** (`filesystem.rs:258-274`) is the resumable DFS walker itself. This is the heart of the streaming model:
 
 ```rust
 struct WalkState {
@@ -147,7 +148,7 @@ The key invariants, documented in the source:
 
 The insight that makes streaming work without a global sort is: *per-directory sorting plus depth-first traversal produces globally sorted keys*. When the walker enters a directory, it reads all entries, sorts them using `cmp_with_trailing_sep` (which treats directory names as if they had a virtual trailing `/`), and then processes them front-to-back. Directories are descended into immediately (depth-first), so all descendants of entry N are emitted before entry N+1. Since the entries within each directory are sorted, and descendants inherit their parent's prefix, the global key sequence is sorted.
 
-The `cmp_with_trailing_sep` function at `filesystem.rs:1187-1196` implements this ordering:
+The `cmp_with_trailing_sep` function at `filesystem.rs:1194-1203` implements this ordering:
 
 ```rust
 fn cmp_with_trailing_sep(
@@ -168,11 +169,12 @@ This mirrors Git tree ordering (`name` vs `name/`) and is the key comparator tha
 
 ## The FilesystemConnector Struct
 
-Here is the definition from `filesystem.rs:280-298`:
+Here is the definition from `filesystem.rs:283-301`:
 
 ```rust
 pub struct FilesystemConnector {
     root: PathBuf,
+    connector_instance: ConnectorInstanceIdHash,
     emit_tokens: bool,
     max_walk_depth: usize,
     max_warnings: usize,
@@ -195,6 +197,8 @@ Field-by-field breakdown:
 
 - **`root: PathBuf`** -- The directory root passed at construction. On the first enumeration call, this is canonicalized via `fs::canonicalize` to resolve relative paths and root-level symlinks. Canonicalization prevents cwd drift: if the process working directory changes after construction, the connector still opens files from the correct absolute path.
 
+- **`connector_instance: ConnectorInstanceIdHash`** -- A hash derived from the root path bytes at construction time via `ConnectorInstanceIdHash::from_instance_id_bytes`. This scopes stable item IDs to the connector instance, so identical relative paths under different roots produce distinct `StableItemId` values. The hash participates in `derive_stable_item_id` and is threaded through `WalkQuery` to each `next_file` call.
+
 - **`emit_tokens: bool`** -- Controls whether walk-state tokens are included in cursors. Defaults to `false`. When `true`, each page's next cursor carries a serialized `WalkToken` that encodes the DFS stack position, enabling O(1) resume without rewinding from root. Key-based resume remains available regardless of this setting.
 
 - **`max_walk_depth: usize`** -- Hard limit on directory recursion depth (default: 512). Directories deeper than this limit are skipped with a warning, preventing pathological directory trees from exhausting the DFS stack.
@@ -211,7 +215,7 @@ Field-by-field breakdown:
 
 - **`root_fd: Option<OwnedFd>`** -- A directory file descriptor for the canonicalized root, opened lazily by `ensure_root_fd`. All read-path operations use `openat` relative to this fd, confining file access to the subtree under the root.
 
-- **`cached_file: Option<CachedFile>`** -- A single-entry FD cache for sequential `read_range` calls, using a named struct (`filesystem.rs:180-183`):
+- **`cached_file: Option<CachedFile>`** -- A single-entry FD cache for sequential `read_range` calls, using a named struct (`filesystem.rs:174-177`):
 
 ```rust
 struct CachedFile {
@@ -238,7 +242,7 @@ The connector uses a builder pattern for configuration. All builder methods retu
 
 ## FileEntry: One Walk Output
 
-Here is the definition from `filesystem.rs:168-173`:
+Here is the definition from `filesystem.rs:162-167`:
 
 ```rust
 struct FileEntry {
@@ -252,7 +256,7 @@ struct FileEntry {
 Unlike the old design where `FileEntry` was one row in a persistent in-memory index, this is now an internal staging type between `WalkState::next_file` and page assembly. It does not represent a persisted or full in-memory index -- it is produced, consumed into a `ScanItem`, and discarded within a single page.
 
 - **`key: ItemKey`** -- The encoded relative path. Both the sort key and the value returned as `ItemKey` in enumeration pages.
-- **`stable_item_id: StableItemId`** -- Derived via `derive_stable_item_id(FILESYSTEM_CONNECTOR_TAG, &key)`. The `FILESYSTEM_CONNECTOR_TAG` is `ConnectorTag::from_ascii(b"fslocal")`, ensuring filesystem-sourced items have identity hashes disjoint from other connector types.
+- **`stable_item_id: StableItemId`** -- Derived via `derive_stable_item_id(FILESYSTEM_CONNECTOR_TAG, query.connector_instance, &key)`. The `FILESYSTEM_CONNECTOR_TAG` is `ConnectorTag::from_ascii(b"fslocal")`, and `query.connector_instance` is the `ConnectorInstanceIdHash` derived from the root path. Together they ensure filesystem-sourced items have identity hashes disjoint from other connector types and other connector instances scanning different roots.
 - **`version: VersionId`** -- Always `VersionId::Weak(...)`, computed from file metadata. Weak versions are cheaper than content hashing but can diverge between enumeration and read if the file changes.
 - **`size: u64`** -- File byte size at walk time, used for size hints in enumeration pages.
 
@@ -262,7 +266,7 @@ Unlike the old design where `FileEntry` was one row in a persistent in-memory in
 
 Construction of a `FilesystemConnector` is cheap: no I/O occurs. The first call that needs the filesystem triggers two lazy initialization steps.
 
-### `ensure_root_fd` (filesystem.rs:415-440)
+### `ensure_root_fd` (filesystem.rs:422-445)
 
 This method canonicalizes the root path and opens a directory fd, but -- critically -- it does *not* latch failures. The streaming walk model intentionally retries on every call when the root is unavailable because root-directory conditions can change between calls (3-4 syscalls per attempt is cheap). This is a deliberate departure from the old `IndexState::Failed` memoization pattern.
 
@@ -293,9 +297,9 @@ fn ensure_root_fd(&mut self) -> Result<(), EnumerateError> {
 }
 ```
 
-The root identity verification step (`verify_root_identity` at `filesystem.rs:2174-2182`) narrows the TOCTOU window. The connector captures the canonical path's `(dev, ino)` *before* opening, then compares it to the opened fd's `fstat` result. The race window is stat→open (same direction) rather than open→stat where the fd could refer to a different directory. If the identity mismatches, the error is classified as retryable (a directory swap is a transient environmental condition, not a permanent attribute of the path).
+The root identity verification step (`verify_root_identity` at `filesystem.rs:2186-2194`) narrows the TOCTOU window. The connector captures the canonical path's `(dev, ino)` *before* opening, then compares it to the opened fd's `fstat` result. The race window is stat→open (same direction) rather than open→stat where the fd could refer to a different directory. If the identity mismatches, the error is classified as retryable (a directory swap is a transient environmental condition, not a permanent attribute of the path).
 
-### `start_walk_if_needed` (filesystem.rs:443-458)
+### `start_walk_if_needed` (filesystem.rs:448-463)
 
 This method creates the initial `WalkState` on the first enumeration request:
 
@@ -318,13 +322,13 @@ fn start_walk_if_needed(&mut self, deadline: Option<Instant>) -> Result<(), Enum
 }
 ```
 
-`WalkState::new` (`filesystem.rs:1504-1551`) reads the root directory, sorts its entries into the first `WalkFrame`, seeds the `visited_dirs` set with the root's `(dev, ino)`, and pre-allocates a path buffer with 4 KiB of headroom for typical path component growth. The walker is now ready to yield files.
+`WalkState::new` (`filesystem.rs:1512-1559`) reads the root directory, sorts its entries into the first `WalkFrame`, seeds the `visited_dirs` set with the root's `(dev, ino)`, and pre-allocates a path buffer with 4 KiB of headroom for typical path component growth. The walker is now ready to yield files.
 
 ---
 
 ## The Directory Walk: `WalkState::next_file`
 
-The `next_file` method (`filesystem.rs:1716-2000`) is the engine of the streaming model. Each call returns the next regular file in globally sorted DFS order, or `None` when the walk is exhausted. The walker is resilient to filesystem churn: unreadable entries, symlinks, special files, and encoding failures become warnings and are skipped.
+The `next_file` method (`filesystem.rs:1724-2008`) is the engine of the streaming model. Each call returns the next regular file in globally sorted DFS order, or `None` when the walk is exhausted. The walker is resilient to filesystem churn: unreadable entries, symlinks, special files, and encoding failures become warnings and are skipped.
 
 The control flow within `next_file`:
 
@@ -356,13 +360,13 @@ When the DFS stack empties, `self.exhausted` is set to `true` and subsequent cal
 
 ### Bounded Directory Size: `MAX_ENTRIES_PER_DIR`
 
-The `read_dir_sorted_entries` function (`filesystem.rs:1430-1484`) enforces a hard cap of 500,000 entries per directory (`MAX_ENTRIES_PER_DIR` at `filesystem.rs:1138`). Pathological directories (e.g., `/proc`-like mounts or intentional DoS) could otherwise exhaust memory during the sort step. 500K entries × ~40 bytes ≈ 20 MB, which is large but bounded. Exceeding this limit returns a retryable error rather than a warning, because the directory's sorted state cannot be produced.
+The `read_dir_sorted_entries` function (`filesystem.rs:1431-1485`) enforces a hard cap of 500,000 entries per directory (`MAX_ENTRIES_PER_DIR` at `filesystem.rs:1145`). Pathological directories (e.g., `/proc`-like mounts or intentional DoS) could otherwise exhaust memory during the sort step. 500K entries × ~40 bytes ≈ 20 MB, which is large but bounded. Exceeding this limit returns a retryable error rather than a warning, because the directory's sorted state cannot be produced.
 
 ---
 
 ## Key-Range Pruning: `should_skip_subtree`
 
-When key-range bounds are present (from `with_key_range()`, `with_shard_bounds()`, or per-request shard bounds), the walker can skip entire directory subtrees without descent. This is the function from `filesystem.rs:1400-1423`:
+When key-range bounds are present (from `with_key_range()`, `with_shard_bounds()`, or per-request shard bounds), the walker can skip entire directory subtrees without descent. This is the function from `filesystem.rs:1401-1424`:
 
 ```rust
 pub(crate) fn should_skip_subtree(
@@ -399,7 +403,7 @@ Two pruning conditions:
 
 The implementation is conservative: `true` means safe-to-skip; `false` may still be out of range but is kept to avoid false-positive pruning. Root prefixes (empty) are never pruned. Prefixes whose last byte is `0xFF` (no finite successor) are never pruned on the below-range side. Correctness is enforced at the leaf level -- the pruning is an optimization, not the authority.
 
-The `prefix_successor` helper (`filesystem.rs:1378-1387`) uses `InlineVec<u8, 256>` to avoid heap allocation for typical path-length prefixes:
+The `prefix_successor` helper (`filesystem.rs:1381-1388`) uses `InlineVec<u8, 256>` to avoid heap allocation for typical path-length prefixes:
 
 ```rust
 pub(crate) fn prefix_successor(prefix: &[u8]) -> Option<InlineVec<u8, 256>> {
@@ -420,11 +424,11 @@ pub(crate) fn prefix_successor(prefix: &[u8]) -> Option<InlineVec<u8, 256>> {
 
 The streaming walk introduces a more complex resume protocol than the old binary-search model. The connector must reconcile its live `WalkState` with the caller-provided `Cursor` on every page request.
 
-### `align_walk_to_cursor` (filesystem.rs:586-664)
+### `align_walk_to_cursor` (filesystem.rs:593-671)
 
 This is the entry point for cursor reconciliation. The logic:
 
-1. **Walk state exists and matches cursor.** The `cursor_matches_state` helper (`filesystem.rs:489-495`) compares `WalkState::last_emitted_key` against `cursor.last_key()`. If they agree, the walk is already positioned correctly -- continue from where we left off.
+1. **Walk state exists and matches cursor.** The `cursor_matches_state` helper (`filesystem.rs:496-502`) compares `WalkState::last_emitted_key` against `cursor.last_key()`. If they agree, the walk is already positioned correctly -- continue from where we left off.
 
 2. **Cursor has no last key.** This is an initial cursor. Reset the walk state from root.
 
@@ -434,7 +438,7 @@ This is the entry point for cursor reconciliation. The logic:
 
 The `cursor_matches_state` function has a subtle guard: an exhausted walk that never emitted any key (`last_emitted_key == None`) must *not* match an initial cursor (`last_key == None`). Without this, reusing a connector across ranges would silently drop results.
 
-### `seek_after_last_key` (filesystem.rs:501-548)
+### `seek_after_last_key` (filesystem.rs:508-555)
 
 After a walk reset (either from token restore or root rebuild), this method advances the walker through the sorted key space until it finds the first file strictly greater than `last_key`, staging that file into `WalkState::pending` for the next page:
 
@@ -471,7 +475,7 @@ This is O(n) in the worst case (full rewind from root). Token-based resume amort
 
 ### Walk Tokens: `WalkToken` and `WalkTokenFrame`
 
-Walk tokens provide a serialized DFS checkpoint that can be embedded in cursors. The types (`filesystem.rs:231-241`):
+Walk tokens provide a serialized DFS checkpoint that can be embedded in cursors. The types (`filesystem.rs:230-244`):
 
 ```rust
 struct WalkToken {
@@ -486,16 +490,16 @@ struct WalkTokenFrame {
 
 The wire format is compact: `[version: u8][frame_count: u16][frames...]`, where each frame is `[component_len: u16][component_bytes][next_child_index: u32]`. Total size is bounded by `MAX_TOKEN_SIZE`.
 
-**Encoding** (`WalkToken::encode_from_state`, `filesystem.rs:1314-1370`) serializes the current DFS stack in a single buffer. If the stack exceeds the token size budget, frames are truncated from the bottom. The truncated leaf frame has its `next_child_index` rewound by one to force re-entry of the directory whose descendants were dropped.
+**Encoding** (`WalkToken::encode_from_state`, `filesystem.rs:1321-1377`) serializes the current DFS stack in a single buffer. If the stack exceeds the token size budget, frames are truncated from the bottom. The truncated leaf frame has its `next_child_index` rewound by one to force re-entry of the directory whose descendants were dropped.
 
-**Decoding** (`WalkToken::decode_bytes`, `filesystem.rs:1263-1312`) validates the wire format with several safety checks:
+**Decoding** (`WalkToken::decode_bytes`, `filesystem.rs:1270-1319`) validates the wire format with several safety checks:
 - Version byte must match `WALK_TOKEN_VERSION` (0x01).
 - Root frame must have an empty component.
 - Non-root frames must have non-empty components with no `/`, NUL, `.`, or `..` (preventing path traversal).
 - Pre-allocation is capped at 64 frames regardless of the declared count (defense against forged tokens).
 - Trailing bytes are rejected.
 
-**Restoring** (`WalkState::from_token`, `filesystem.rs:1559-1690`) walks the token's frame sequence against the live filesystem: for each frame, it reads the corresponding directory, sorts entries, fast-forwards the deque by `next_child_index`, and verifies no symlinks or cycles are introduced by the token-supplied components. Any failure returns `Ok(None)`, falling back to key-only resume.
+**Restoring** (`WalkState::from_token`, `filesystem.rs:1571-1702`) walks the token's frame sequence against the live filesystem: for each frame, it reads the corresponding directory, sorts entries, fast-forwards the deque by `next_child_index`, and verifies no symlinks or cycles are introduced by the token-supplied components. Any failure returns `Ok(None)`, falling back to key-only resume.
 
 In test builds, the connector runs a cross-check: after token-based resume, it performs an independent key-only walk from root to verify both resume methods agree on the next key. On mismatch, the token result is discarded and key-only position is used.
 
@@ -503,13 +507,13 @@ In test builds, the connector runs a cross-check: after token-based resume, it p
 
 ## Enumeration: `enumerate_page_bounds`
 
-The core enumeration method at `filesystem.rs:730-856` drives the streaming walk directly:
+The core enumeration method at `filesystem.rs:737-862` drives the streaming walk directly:
 
 1. **Deadline check.** If the budget is already expired, return a retryable error.
 
 2. **Bound validation.** If `start > end`, return a permanent error.
 
-3. **Bound intersection.** The `intersect_key_bounds` helper (`filesystem.rs:1213-1237`) intersects per-request bounds with connector-level key-range bounds. If the intersection collapses to an empty interval, return an empty page immediately.
+3. **Bound intersection.** The `intersect_key_bounds` helper (`filesystem.rs:1220-1244`) intersects per-request bounds with connector-level key-range bounds. If the intersection collapses to an empty interval, return an empty page immediately.
 
 4. **Cursor alignment.** `align_walk_to_cursor` positions the walk state (see above).
 
@@ -523,10 +527,10 @@ If no in-range items are available, the returned page is empty and the cursor is
 
 ### Capabilities
 
-The `EnumerationConnector` implementation at `filesystem.rs:1046-1053` reports:
+The `caps` method at `filesystem.rs:1053-1060` reports:
 
 ```rust
-fn caps(&self) -> ConnectorCapabilities {
+pub fn caps(&self) -> ConnectorCapabilities {
     ConnectorCapabilities {
         seek_by_key: true,
         token_resume: self.emit_tokens,
@@ -536,7 +540,7 @@ fn caps(&self) -> ConnectorCapabilities {
 }
 ```
 
-Split hints are enabled. `choose_split_point_bounds` (`filesystem.rs:890-925`) validates deadline and range bounds (for consistent error classification), then delegates to the integrated `StreamingSplitEstimator`. The estimator is fed during pagination walks on the same connector instance, so no separate full-range walk is required. A fresh connector or one that has just rebuilt its walk state starts from an empty estimator and returns `Ok(None)` until sufficient pages have been served. The returned split key is further guarded by `is_valid_split_candidate` to prevent degenerate splits that fall before the cursor or outside the effective shard range.
+Split hints are enabled. `choose_split_point_bounds` (`filesystem.rs:897-932`) validates deadline and range bounds (for consistent error classification), then delegates to the integrated `StreamingSplitEstimator`. The estimator is fed during pagination walks on the same connector instance, so no separate full-range walk is required. A fresh connector or one that has just rebuilt its walk state starts from an empty estimator and returns `Ok(None)` until sufficient pages have been served. The returned split key is further guarded by `is_valid_split_candidate` to prevent degenerate splits that fall before the cursor or outside the effective shard range.
 
 ---
 
@@ -552,15 +556,19 @@ Storage systems with skewed file sizes benefit from byte-balanced shards rather 
 
 The estimator implements a three-phase pipeline: dual-axis sampling, stride-doubling compaction, and midpoint estimation.
 
-**Phase 1: Dual-axis sampling.** Each incoming `(key, file_size)` pair is tested against two independent cadences -- a *rank stride* (every N-th item by ordinal position) and a *byte stride* (every M bytes of cumulative file weight). The key is recorded if either cadence fires. A byte-triggered sample records the exact byte mark it straddles, giving tighter byte-space fidelity than rank alone. At most one sample is recorded per `observe` call, an intentional O(1) amortised-cost trade-off.
+**Phase 1: Dual-axis sampling.** Each incoming `(key, file_size)` pair is tested against two independent cadences -- a *rank stride* (every N-th item by ordinal position) and a *byte stride* (every M bytes of observed byte weight). The key is recorded if either cadence fires. A byte-triggered sample records the exact byte mark it straddles, giving tighter byte-space fidelity than rank alone. At most one sample is recorded per `observe` call, an intentional O(1) amortised-cost trade-off.
 
-**Phase 2: Stride-doubling compaction.** When the sample buffer exceeds its cap, it is compacted to half capacity via nearest-neighbor selection on the cumulative-byte axis (falling back to rank when all byte positions are identical). Both strides are then doubled so future observations are sampled at the coarser cadence. Because the buffer halves and the strides double together, the total number of compaction events is logarithmic in stream length, and non-sampled steady-state observations require no heap work.
+**Phase 2: Stride-doubling compaction.** When the sample buffer exceeds its cap, it is compacted to half capacity via nearest-neighbor selection on the recorded-byte-position axis (falling back to rank when all byte positions are identical). Both strides are then doubled so future observations are sampled at the coarser cadence. Because the buffer halves and the strides double together, the total number of compaction events is logarithmic in stream length, and non-sampled steady-state observations require no heap work.
 
-**Phase 3: Midpoint estimation.** `estimate_split_key` binary-searches the retained samples for the key whose recorded byte position is closest to `total_bytes / 2`. If all items are zero-size, it falls back to the rank midpoint (`count / 2`). A special guard prevents returning the very first observed key: when byte weight is front-loaded (e.g., one huge file followed by many small ones), the byte-weighted median can land on item 0, which would produce a zero-item left shard. In that case the estimator falls back to the rank-based midpoint instead.
+Compaction uses a `SampleAxis` enum (`split_estimator.rs:103-113`) to select between `Rank` and `Bytes` axes. The `compaction_axis` function checks whether the first and last samples have distinct recorded byte positions; if so, it selects `SampleAxis::Bytes` for nearest-neighbor spacing, otherwise it falls back to `SampleAxis::Rank`. The same axis enum is used by `nearest_sample` during split estimation and by `selected_sample_indices` during compaction.
+
+After nearest-neighbor selection, a **plateau redistribution** pass (`redistribute_plateau_picks` at `split_estimator.rs:354-430`) detects runs of retained picks that share the same axis value. When many samples sit on a "plateau" -- for example, a large run of zero-size files following a single heavy file all share the same recorded byte position -- the forward-progress constraint in nearest-neighbor selection clusters picks at the plateau's leading edge. Plateau redistribution spreads those picks evenly across the plateau's rank extent, preserving rank-axis diversity. Without this step, the rank-fallback split would drift far from the true ordinal midpoint on streams with large zero-byte tails.
+
+**Phase 3: Midpoint estimation.** `estimate_split_key` binary-searches the retained samples for the key whose recorded byte position is closest to `total_bytes / 2`. If all items are zero-size, it falls back to the rank midpoint (`count / 2`). Two boundary guards prevent degenerate splits: the first-key guard catches front-loaded weight where the byte-weighted median lands on item 0 (producing a zero-item left shard), and a symmetric last-key guard catches back-loaded weight where the candidate lands on the last key (producing an empty right shard). Both guards fall back to the rank-based midpoint instead.
 
 ### Core Type
 
-Here is the definition from `split_estimator.rs:362-384`:
+Here is the definition from `split_estimator.rs:539-561`:
 
 ```rust
 pub(crate) struct StreamingSplitEstimator {
@@ -571,11 +579,11 @@ pub(crate) struct StreamingSplitEstimator {
     samples: Vec<Sample>,
     /// Rank sampling stride in observed items.
     rank_stride: u64,
-    /// Byte sampling stride in cumulative byte space.
+    /// Byte sampling stride in byte-position space.
     byte_stride: u64,
     /// Next rank at which a sample should be recorded.
     next_rank_sample: u64,
-    /// Next cumulative-byte mark whose straddling file should be sampled.
+    /// Next byte-position mark whose straddling file should be sampled.
     next_byte_mark: u64,
     /// Total observed byte weight (saturating on overflow).
     total_bytes: u64,
@@ -588,14 +596,14 @@ pub(crate) struct StreamingSplitEstimator {
 }
 ```
 
-Each retained `Sample` (`split_estimator.rs:114-124`) carries the key together with its position on both axes:
+Each retained `Sample` (`split_estimator.rs:123-133`) carries the key together with its position on both axes:
 
 ```rust
 struct Sample {
     /// 0-based ordinal index of this key in stream order.
     rank: u64,
-    /// Cumulative byte position at which this sample was recorded.
-    cumulative_bytes: u64,
+    /// Recorded byte position at which this sample was stored.
+    recorded_byte_position: u64,
     key: Box<[u8]>,
 }
 ```
@@ -604,24 +612,31 @@ Carrying both axes lets the estimator use byte-space interpolation for accuracy 
 
 ### Key Methods
 
-**`observe`** (`split_estimator.rs:453-488`) records one `(key, file_size)` pair from the streaming walk:
+**`observe`** (`split_estimator.rs:648-718`) records one `(key, file_size)` pair from the streaming walk:
 
 ```rust
 pub(crate) fn observe(&mut self, key: &[u8], file_size: u64) {
+    debug_assert!(
+        self.samples
+            .last()
+            .is_none_or(|last| key >= last.key.as_ref()),
+        "observe() requires keys in non-decreasing order; received key that precedes the last sampled key"
+    );
+
     if self.first_observed_key.is_none() {
         self.first_observed_key = Some(Box::<[u8]>::from(key));
     }
 
     let rank = self.count;
-    let cumulative_bytes = self.total_bytes;
+    let recorded_byte_position = self.total_bytes;
     let end_bytes = self.total_bytes.saturating_add(file_size);
 
     // Dual-axis trigger: record if the rank cadence fires OR if this
-    // file's byte interval [cumulative_bytes, end_bytes) straddles the
+    // file's byte interval [recorded_byte_position, end_bytes) straddles the
     // next byte mark.
     let sample_rank = rank >= self.next_rank_sample;
     let sample_bytes = file_size > 0
-        && cumulative_bytes <= self.next_byte_mark
+        && recorded_byte_position <= self.next_byte_mark
         && self.next_byte_mark < end_bytes;
 
     if sample_rank || sample_bytes {
@@ -630,7 +645,7 @@ pub(crate) fn observe(&mut self, key: &[u8], file_size: u64) {
         let byte_position = if sample_bytes {
             self.next_byte_mark
         } else {
-            cumulative_bytes
+            recorded_byte_position
         };
         self.samples.push(Sample::new(rank, byte_position, key));
     }
@@ -640,12 +655,36 @@ pub(crate) fn observe(&mut self, key: &[u8], file_size: u64) {
 
     if self.samples.len() > self.sample_cap {
         self.grow_strides_and_compact();
+        return;
     }
-    self.realign_sample_marks();
+
+    if sample_rank {
+        self.next_rank_sample = rank.saturating_add(self.rank_stride);
+    }
+    if sample_bytes {
+        let next_byte_mark = self.next_byte_mark.saturating_add(self.byte_stride);
+        self.next_byte_mark = if next_byte_mark < end_bytes {
+            align_to_stride(self.total_bytes, self.byte_stride)
+        } else {
+            next_byte_mark
+        };
+    }
+
+    if self.count == u64::MAX || self.total_bytes == u64::MAX {
+        self.realign_sample_marks();
+    }
 }
 ```
 
-**`estimate_split_key`** (`split_estimator.rs:504-532`) returns the retained key closest to the byte-weighted midpoint:
+The control flow after sample insertion has three important branches:
+
+1. **Compaction path**: If the sample buffer exceeds its cap, `grow_strides_and_compact()` fires (which internally calls `realign_sample_marks()`), and the method returns early. No per-axis mark advancement is needed because compaction realigns both marks onto the new doubled stride grid.
+
+2. **Normal path**: Each axis advances its next-sample mark independently only when its trigger fired. The rank mark advances by one `rank_stride`. The byte mark advances by one `byte_stride`, but if the file was so large that `end_bytes` already exceeds the next mark, `align_to_stride` snaps forward to the next grid-aligned position beyond the consumed bytes. This prevents a single large file from causing the byte mark to fall behind the actual byte counter.
+
+3. **Counter saturation**: At `u64::MAX` for either counter, `realign_sample_marks()` is called to prevent stale marks from blocking further sampling. This is a defensive edge case for streams exceeding 2^64 items or bytes.
+
+**`estimate_split_key`** (`split_estimator.rs:741-782`) returns the retained key closest to the byte-weighted midpoint:
 
 ```rust
 pub(crate) fn estimate_split_key(&self) -> Option<&[u8]> {
@@ -675,15 +714,32 @@ pub(crate) fn estimate_split_key(&self) -> Option<&[u8]> {
         return Self::nearest_sample(&self.samples, SampleAxis::Rank, rank_target);
     }
 
+    // Symmetric guard: avoid degenerate "last item" splits when weight is
+    // back-loaded, which would produce an empty right shard.
+    if self
+        .samples
+        .last()
+        .is_some_and(|last| candidate == last.key.as_ref())
+    {
+        return Self::nearest_sample(&self.samples, SampleAxis::Rank, rank_target);
+    }
+
     Some(candidate)
 }
 ```
+
+Two boundary guards prevent degenerate splits:
+
+- **First-key guard**: when weight is front-loaded (e.g. one huge file followed by many small ones), the byte-weighted median can land on item 0, producing a zero-item left shard. The first observed key is tracked explicitly in `first_observed_key` so this guard survives downsampling that might evict the original first sample.
+- **Last-key guard**: the symmetric case -- when weight is back-loaded, the candidate can land on the last key, producing an empty right shard. The check uses `samples.last()` rather than a separate tracked field because the estimator only returns sampled keys (key-fidelity invariant) and compaction always preserves the last sample.
+
+Both guards fall back to the rank-based midpoint instead.
 
 ### Integration with the Filesystem Connector
 
 The estimator is instance-scoped to the `FilesystemConnector`. Three integration points tie it to the connector's lifecycle:
 
-**Feeding during pagination.** Inside `enumerate_page_bounds` (`filesystem.rs:811`), every in-range file emitted during page assembly is observed:
+**Feeding during pagination.** Inside `enumerate_page_bounds` (`filesystem.rs:818`), every in-range file emitted during page assembly is observed:
 
 ```rust
 // Only caller-visible, in-range files contribute to the estimator.
@@ -692,7 +748,7 @@ self.split_estimator.observe(file.key.as_bytes(), file.size);
 
 Files outside the effective key range (pruned by subtree or bound checks) are not fed, so the estimator's sketch reflects only the key space the connector is actively serving.
 
-**Reset on walk rebuild.** `reset_walk_state` (`filesystem.rs:469-481`) reconstructs the `WalkState` from root and replaces the estimator with a fresh instance:
+**Reset on walk rebuild.** `reset_walk_state` (`filesystem.rs:476-486`) reconstructs the `WalkState` from root and replaces the estimator with a fresh instance:
 
 ```rust
 fn reset_walk_state(&mut self, deadline: Option<Instant>) -> Result<(), EnumerateError> {
@@ -712,19 +768,19 @@ fn reset_walk_state(&mut self, deadline: Option<Instant>) -> Result<(), Enumerat
 
 This prevents stale observations from a prior walk from contaminating split hints for a new traversal. Cursor realignment, key-range changes, and any other event that rebuilds the walk from root also reset the estimator.
 
-**Split-point selection.** `choose_split_point_bounds` (`filesystem.rs:890-925`) calls `self.split_estimator.estimate_split_key()` to obtain a candidate, then validates it against the effective shard range and cursor position via `is_valid_split_candidate`. If the estimator has insufficient data (fewer than two observations), or if the candidate fails validation, the method returns `Ok(None)` -- the caller retries after more pages have been served.
+**Split-point selection.** `choose_split_point_bounds` (`filesystem.rs:897-932`) calls `self.split_estimator.estimate_split_key()` to obtain a candidate, then validates it against the effective shard range and cursor position via `is_valid_split_candidate`. If the estimator has insufficient data (fewer than two observations), or if the candidate fails validation, the method returns `Ok(None)` -- the caller retries after more pages have been served.
 
 ### Complexity and Memory
 
 - **`observe`**: O(1) amortised. Compaction fires at most O(log(stream_length / sample_cap)) times, each costing O(sample_cap).
 - **`estimate_split_key`**: O(log sample_cap) binary search.
-- **Memory**: O(sample_cap) samples, each carrying a heap-allocated key. The default cap (`DEFAULT_SAMPLE_CAP = 1024`) is sufficient for less than 1% byte-weighted error on the crate's 20,000-key descending-size regression workload.
+- **Memory**: O(sample_cap) samples, each carrying a heap-allocated key. The default cap (`DEFAULT_SAMPLE_CAP = 1024` at `split_estimator.rs:586`) is sufficient for less than 1% byte-weighted error on the crate's 20,000-key descending-size regression workload.
 
 ### Design Choices
 
 **Sparse sample set over full sketch.** Retaining concrete keys avoids the need to re-derive a split key from a quantile summary. The estimator only returns *actually observed* keys; it never synthesizes or interpolates key bytes. This eliminates an entire class of encoding bugs where a synthesized key might not correspond to a real file path.
 
-**u128 arithmetic in interpolation.** The `interpolated_position` helper uses `u128` intermediate arithmetic to avoid floating-point rounding issues at byte offsets above 2^53. Cumulative byte positions for large filesystems can easily exceed that threshold.
+**u128 arithmetic in interpolation.** The `interpolated_position` helper uses `u128` intermediate arithmetic to avoid floating-point rounding issues at byte offsets above 2^53. Recorded byte positions for large filesystems can easily exceed that threshold.
 
 **Single byte-mark per `observe` call.** Each call records at most one sample, even if the file's byte range spans multiple stride marks. This bounds per-observation cost to O(1). For Zipf-like workloads dominated by a few very large files, the byte axis may have gaps in that region, but the rank sample for the same file still captures it. A dedicated regression test confirms less than 1% byte-weighted error on a 20,000-key Zipf-like stream.
 
@@ -732,7 +788,7 @@ This prevents stale observations from a prior walk from contaminating split hint
 
 ## The Security Model: `open_beneath_root`
 
-This is the function that prevents the symlink-following attack from the opening scenario. Here is the definition from `filesystem.rs:939-1016`:
+This is the function that prevents the symlink-following attack from the opening scenario. Here is the definition from `filesystem.rs:946-1022`:
 
 ```rust
 fn open_beneath_root(&self, ref_bytes: &[u8]) -> Result<(fs::File, fs::Metadata), ReadError> {
@@ -749,7 +805,7 @@ This function implements four layers of defense:
 
 **O_NOFOLLOW at every component.** The `openat` call applies `O_NOFOLLOW` to both intermediate directories and the leaf file. If an attacker replaces an intermediate directory with a symlink (e.g., `sub/` → `/etc/`), the `openat` on `sub` returns `ELOOP`, classified as permanent. Applying `O_NOFOLLOW` only at the final component would leave intermediate symlink replacements undetected.
 
-**O_NONBLOCK on open, then fcntl to clear.** The leaf file is opened with `O_NONBLOCK` to prevent the `open` syscall from blocking indefinitely on FIFOs or device nodes. In a TOCTOU race, a regular file could be replaced with a FIFO between walk and read. Without `O_NONBLOCK`, the `open` on the FIFO would block forever. After validation, `clear_nonblock` (`filesystem.rs:2108-2129`) removes the flag via `fcntl(F_SETFL)` so that subsequent reads use normal blocking semantics.
+**O_NONBLOCK on open, then fcntl to clear.** The leaf file is opened with `O_NONBLOCK` to prevent the `open` syscall from blocking indefinitely on FIFOs or device nodes. In a TOCTOU race, a regular file could be replaced with a FIFO between walk and read. Without `O_NONBLOCK`, the `open` on the FIFO would block forever. After validation, `clear_nonblock` (`filesystem.rs:2114-2135`) removes the flag via `fcntl(F_SETFL)` so that subsequent reads use normal blocking semantics.
 
 **fstat validation.** After opening the leaf, `metadata()` (backed by `fstat`) checks that the opened descriptor refers to a regular file. This catches the case where a file was replaced with a directory, socket, or device node between `openat` and the first read.
 
@@ -761,7 +817,7 @@ Note that the streaming model no longer has a `verify_membership` step that bina
 
 ## Read Path: `open` and `read_range`
 
-The `ReadConnector` implementation at `filesystem.rs:1084-1122`:
+The read methods at `filesystem.rs:1091-1129`:
 
 **`open`** opens a fresh file handle via `open_beneath_root`, clears `O_NONBLOCK`, and returns a `Box<dyn io::Read + Send>`. Budget enforcement is left to the runtime layer.
 
@@ -789,13 +845,13 @@ fn get_or_open_cached(&mut self, item_ref: &ItemRef) -> Result<&fs::File, ReadEr
 
 The cache holds at most one fd, bounding resource usage. When a `read_range` targets a different file, the old fd is dropped and a new one is opened. The `read_range` call itself uses `read_at` (positioned read) so the file offset is not shared state.
 
-The FD cache is cleared during `reset_walk_state` (`filesystem.rs:469-481`), because cursor-style jumps can move reads to unrelated paths where keeping stale per-file cache entries provides no locality benefit.
+The FD cache is cleared during `reset_walk_state` (`filesystem.rs:476-486`), because cursor-style jumps can move reads to unrelated paths where keeping stale per-file cache entries provides no locality benefit.
 
 ---
 
 ## Path Encoding: `encode_rel_path`
 
-Here is the definition from `filesystem.rs:2014-2037`:
+Here is the definition from `filesystem.rs:2026-2048`:
 
 ```rust
 fn encode_rel_path(rel: &Path) -> Result<Vec<u8>, EnumerateError> {
@@ -830,7 +886,7 @@ Only `Component::Normal` segments are accepted -- `.`, `..`, and root prefixes a
 
 ## Weak Version IDs: `derive_fs_version_id`
 
-Here is the definition from `filesystem.rs:2056-2064`:
+Here is the definition from `filesystem.rs:2068-2076`:
 
 ```rust
 fn derive_fs_version_id(metadata: &fs::Metadata) -> ObjectVersionId {

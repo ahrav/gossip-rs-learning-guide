@@ -36,8 +36,8 @@ scan until EOF." Each new connector multiplies the integration surface.
 
 The `gossip-contracts` crate solves this with a connector contract layer that
 lives in `crates/gossip-contracts/src/connector/`. This module defines the
-types, traits, and validation rules that every connector must satisfy. Runtime
-connector implementations live elsewhere. The contracts crate owns the
+types, error taxonomy, and validation rules that every connector must satisfy.
+Runtime connector implementations live elsewhere. The contracts crate owns the
 interface; it does not own the implementations.
 
 Recall from Chapter 5 (Boundary 1) that `StableItemId` and `ConnectorTag`
@@ -50,10 +50,10 @@ what they consume (shard specs, budgets, resume cursors).
 
 ---
 
-## The Two-Trait Design
+## The Two Method Groups
 
-The connector contract splits runtime behavior across two traits:
-`EnumerationConnector` for listing operations and `ReadConnector` for content
+The connector contract organizes runtime behavior into two method groups:
+enumeration methods for listing operations and read methods for content
 access. This separation is not accidental.
 
 Enumeration and reading have fundamentally different resource profiles.
@@ -66,91 +66,28 @@ rate-limit ceilings, different cost tiers (S3 charges differently for LIST
 vs. GET), and different failure modes (a rate-limited LIST returns HTTP 503;
 a missing object returns HTTP 404).
 
-By splitting the traits, orchestration can compose them independently. A
-connector might enumerate items on one thread and read items on another. A
-circuit breaker can trip on the read path (too many 5xx errors fetching
-content) without halting enumeration. A test harness can mock enumeration
-while using a real read path, or vice versa.
+By keeping the method groups separate, orchestration can compose them
+independently. A connector might enumerate items on one thread and read items
+on another. A circuit breaker can trip on the read path (too many 5xx errors
+fetching content) without halting enumeration. A test harness can mock
+enumeration while using a real read path, or vice versa.
 
-Here is the definition from `api.rs`:
-
-```rust
-/// Runtime contract for connector enumeration/listing operations.
-///
-/// This trait is intentionally separate from [`ReadConnector`]: some backends
-/// can list metadata efficiently but have different cost/failure behavior for
-/// content reads. Keeping the surfaces split lets orchestration compose them
-/// independently, while [`ConnectorInstance`] provides a shorthand bound when
-/// both are required.
-pub trait EnumerationConnector: Send {
-    /// Advertise connector capabilities used by orchestration planning.
-    ///
-    /// This is a declarative, static profile for the configured
-    /// connector instance. It should align with method behavior, but callers
-    /// must still handle runtime `unsupported`/policy errors.
-    fn caps(&self) -> ConnectorCapabilities;
-
-    /// Enumerate one page of items for `shard` from `cursor` under `budgets`.
-    ///
-    /// Returns scan items plus the continuation cursor for the next request
-    /// (see [`EnumerationPage`]). Empty pages are valid and carry meaning
-    /// through the returned cursor state.
-    ///
-    /// # Budget enforcement
-    ///
-    /// [`Budgets`] values are **advisory at this trait layer**. Connector
-    /// implementations **should** honor [`Budgets::max_items`] as an upper
-    /// bound on the returned page length, but callers **must not** assume
-    /// compliance. The runtime orchestration layer is responsible for
-    /// enforcement: it **may** truncate excess items, apply backpressure,
-    /// or terminate a misbehaving connector.
-    fn enumerate_page(
-        &mut self,
-        shard: &ShardSpec,
-        cursor: &Cursor,
-        budgets: Budgets,
-    ) -> Result<EnumerationPage, EnumerateError>;
-
-    /// Optional split-point hint for dynamic shard subdivision.
-    ///
-    /// Default behavior is `Ok(None)`, indicating "no hint available". Keep
-    /// this default unless the connector can provide useful, low-risk split
-    /// candidates. Returned hints are advisory and may be ignored by callers.
-    /// Runtime callers **should** validate that returned keys fall within
-    /// the shard's key range before acting on them.
-    ///
-    /// # Capability consistency
-    ///
-    /// The default implementation includes a `debug_assert!` that fires when
-    /// [`caps().split_hints`](ConnectorCapabilities::split_hints) is `true`
-    /// but this method has not been overridden. This catches a misconfiguration
-    /// where the connector advertises split-hint support without providing an
-    /// implementation. Connectors that override this method **must** also
-    /// return `split_hints: true` from [`caps`](EnumerationConnector::caps).
-    fn choose_split_point(
-        &mut self,
-        _shard: &ShardSpec,
-        _cursor: &Cursor,
-        _budgets: Budgets,
-    ) -> Result<Option<ItemKey>, EnumerateError> {
-        debug_assert!(
-            !self.caps().split_hints,
-            "connector advertises split_hints but does not override choose_split_point"
-        );
-        Ok(None)
-    }
-}
-```
+Each concrete connector type (e.g., `S3Connector`, `FilesystemConnector`)
+provides these methods as inherent `pub fn` methods. Polymorphism is handled
+at the `ScanSourceFactory`/`ScanDriver` layer, where each factory knows how
+to construct and drive its concrete connector. The contract types in `api.rs`
+(`ConnectorCapabilities`, `EnumerateError`, `ReadError`) define the shared
+vocabulary that all connectors use.
 
 Three methods define the enumeration surface:
 
-- **`caps(&self) -> ConnectorCapabilities`** -- A static declaration of what
-  the connector supports. Orchestration queries this at registration time to
-  plan its enumeration strategy. The capabilities are declarative intent, not
-  runtime guarantees -- callers must still handle errors from operations that
-  the connector claims to support.
+- **`pub fn caps(&self) -> ConnectorCapabilities`** -- A static declaration
+  of what the connector supports. Orchestration queries this at registration
+  time to plan its enumeration strategy. The capabilities are declarative
+  intent, not runtime guarantees -- callers must still handle errors from
+  operations that the connector claims to support.
 
-- **`enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`** --
+- **`pub fn enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`** --
   The core listing operation. It takes a `ShardSpec` (the key range to
   enumerate within), a `Cursor` (where to resume), and `Budgets` (stop
   conditions). The `ShardSpec` from Boundary 3 defines the key range each
@@ -158,149 +95,26 @@ Three methods define the enumeration surface:
   this layer: the runtime wraps connectors in enforcement adapters rather than
   trusting implementations.
 
-- **`choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`** --
+- **`pub fn choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`** --
   An optional hook for connectors that know where natural partition boundaries
-  exist (Git tree boundaries, S3 common prefixes). The default returns
-  `Ok(None)`. The `debug_assert!` catches a specific misconfiguration: a
-  connector that advertises `split_hints: true` in `caps()` but forgets to
-  override this method.
-
-Here is the definition from `api.rs`:
-
-```rust
-/// Runtime contract for connector item reads.
-///
-/// This surface is split from [`EnumerationConnector`] so orchestration can
-/// reason separately about metadata traversal and payload IO costs.
-pub trait ReadConnector: Send {
-    /// Open an item for sequential read access.
-    ///
-    /// # Return type: `Box<dyn Read + Send>`
-    ///
-    /// The boxed trait object is intentional: it preserves object safety so
-    /// callers can work with `dyn ReadConnector` at runtime (connector
-    /// polymorphism). The heap allocation is acceptable because `open` sits
-    /// on the **WARM** read path — called once per item, not per byte —
-    /// and the IO cost of the subsequent read dominates.
-    ///
-    /// The returned reader must be self-contained (`'static`): implementations
-    /// cannot borrow from `&self` or other local references. Readers must own
-    /// their resources (e.g., an open file handle, a cloned HTTP client, or an
-    /// `Arc`-backed buffer).
-    ///
-    /// # Budget enforcement
-    ///
-    /// [`Budgets`] values are **advisory at this trait layer**. Connector
-    /// implementations **should** respect budget hints (e.g., for chunked
-    /// fetching or deadline-aware reads), but callers **must not** assume
-    /// compliance. The runtime orchestration layer is responsible for
-    /// enforcement: it **must** wrap the returned reader in a size-bounded,
-    /// deadline-aware adapter before passing it to downstream consumers.
-    ///
-    /// Callers may drop the reader at any point; implementations must ensure
-    /// resource cleanup via [`Drop`], not via read-to-completion.
-    ///
-    /// # Item reference affinity
-    ///
-    /// `item_ref` **must** originate from an [`EnumerationPage`] produced by
-    /// this connector instance (or a compatible instance backed by the same
-    /// data source). Passing an [`ItemRef`] obtained from a different
-    /// connector type is a caller error and may produce garbage reads or
-    /// opaque failures.
-    fn open(
-        &mut self,
-        item_ref: &ItemRef,
-        budgets: Budgets,
-    ) -> Result<Box<dyn io::Read + Send>, ReadError>;
-
-    /// Optional range-read fast path.
-    ///
-    /// Writes up to `dst.len()` bytes from `item_ref` starting at `offset`
-    /// into `dst`, returning the number of bytes written. Implementations
-    /// **must** return a value `<= dst.len()`. Runtime callers **should**
-    /// defensively clamp before using the value as a slice bound.
-    ///
-    /// # Overflow safety
-    ///
-    /// Implementors **must** guard against `offset + dst.len()` overflow
-    /// before performing arithmetic on the combined value. Use
-    /// `offset.checked_add(dst.len() as u64)` and return an appropriate
-    /// [`ReadError`] if the addition wraps.
-    ///
-    /// **EOF behavior:** when `offset` is at or past the end of the item,
-    /// implementations must return `Ok(0)` (consistent with
-    /// [`std::io::Read`] semantics). A short read (returned count less than
-    /// `dst.len()`) does not necessarily indicate EOF -- only `Ok(0)` is
-    /// the definitive end-of-item signal.
-    ///
-    /// Connectors without native range support should keep this default,
-    /// which returns a permanent [`ReadError::unsupported`] classification.
-    fn read_range(
-        &mut self,
-        _item_ref: &ItemRef,
-        _offset: u64,
-        _dst: &mut [u8],
-        _budgets: Budgets,
-    ) -> Result<usize, ReadError> {
-        Err(ReadError::unsupported("range_read"))
-    }
-}
-```
+  exist (Git tree boundaries, S3 common prefixes). Connectors without
+  meaningful split knowledge return `Ok(None)`.
 
 Two methods define the read surface:
 
-- **`open(&mut self, item_ref: &ItemRef, budgets: Budgets) -> Result<Box<dyn io::Read + Send>, ReadError>`** --
+- **`pub fn open(&mut self, item_ref: &ItemRef, budgets: Budgets) -> Result<Box<dyn io::Read + Send>, ReadError>`** --
   Opens an item for sequential reading. The return type is a boxed trait
-  object. The doc comment explains why: object safety requires it for `dyn
-  ReadConnector` polymorphism, and the heap allocation is acceptable because
-  `open` is a WARM-path operation (once per item, not once per byte). The
-  `'static` constraint on the reader means implementations must own their
-  resources -- no borrowing from `&self`.
+  object. The heap allocation is acceptable because `open` is a WARM-path
+  operation (once per item, not once per byte). The `'static` constraint on
+  the reader means implementations must own their resources -- no borrowing
+  from `&self`.
 
-- **`read_range(&mut self, ...) -> Result<usize, ReadError>`** -- An optional
-  random-access fast path. The default returns `Err(ReadError::unsupported("range_read"))`,
-  making it safe to leave unimplemented. Connectors that support range reads
-  (S3 with byte-range headers, local filesystem with `seek`) override this.
-  The doc comment specifies overflow safety requirements and EOF semantics.
-
----
-
-## The Convenience Supertrait
-
-When a call path requires both enumeration and read capabilities, it uses a
-single bound instead of writing `EnumerationConnector + ReadConnector`
-everywhere.
-
-Here is the definition from `api.rs`:
-
-```rust
-/// Convenience supertrait for connector types.
-///
-/// Use this as a bound when a call path requires both enumeration and read
-/// capabilities. The blanket implementation means connector types do not
-/// need an explicit `impl ConnectorInstance`.
-///
-/// # Design constraint
-///
-/// Because there is a blanket `impl<T: EnumerationConnector + ReadConnector
-/// + ?Sized> ConnectorInstance for T` (the `?Sized` bound enables `dyn
-///   ConnectorInstance`), adding required methods to this trait would break the
-/// blanket impl — the empty body cannot supply an implementation for
-/// arbitrary `T`. This is intentional: `ConnectorInstance` is a **pure bound
-/// alias**, not an extension point. New connector surface area belongs on
-/// [`EnumerationConnector`] or [`ReadConnector`] directly.
-pub trait ConnectorInstance: EnumerationConnector + ReadConnector {}
-
-impl<T: EnumerationConnector + ReadConnector + ?Sized> ConnectorInstance for T {}
-```
-
-`ConnectorInstance` is a pure bound alias. The blanket `impl` means any type
-that implements both `EnumerationConnector` and `ReadConnector` automatically
-implements `ConnectorInstance`. The `?Sized` bound is essential: it enables
-`dyn ConnectorInstance`, which is how the runtime holds connector objects
-polymorphically. The doc comment makes the design constraint explicit: adding
-methods to `ConnectorInstance` would break the blanket impl, so new surface
-area always goes on the individual traits.
+- **`pub fn read_range(&mut self, ...) -> Result<usize, ReadError>`** -- An
+  optional random-access fast path. Connectors without native range support
+  return `Err(ReadError::unsupported("range_read"))`. Connectors that support
+  range reads (S3 with byte-range headers, local filesystem with `seek`)
+  provide a real implementation. The method specifies overflow safety
+  requirements and EOF semantics (returning `Ok(0)` at end-of-item).
 
 ---
 
@@ -333,8 +147,7 @@ The layers build on each other in a strict dependency order:
   Layer 2: api.rs
   +-------------------------------------------------+
   | ErrorClass, EnumerateError, ReadError,            |
-  | ConnectorCapabilities, EnumerationConnector,      |
-  | ReadConnector, ConnectorInstance                  |
+  | ConnectorCapabilities                             |
   +-------------------------------------------------+
                           |
                           v
@@ -357,12 +170,14 @@ data: no behavior beyond construction, access, and formatting. Every type
 validates at construction time (non-empty, bounded, correctly paired). This
 layer has no knowledge of traits or operations.
 
-**Layer 2 (api)** defines operation contracts. It imports value types from
-Layer 1 and defines traits that connectors implement. The error types
-(`EnumerateError`, `ReadError`) model operation outcomes. The capability
-struct (`ConnectorCapabilities`) advertises connector features. This layer
-knows about `ShardSpec` from Boundary 2's coordination module but does not
-depend on any runtime connector.
+**Layer 2 (api)** defines the shared vocabulary for operation outcomes and
+capabilities. It imports value types from Layer 1 and defines the error types
+(`EnumerateError`, `ReadError`) that model operation outcomes, plus the
+capability struct (`ConnectorCapabilities`) that advertises connector
+features. Concrete connector types provide `caps`, `enumerate_page`,
+`choose_split_point`, `open`, and `read_range` as inherent methods using
+these types. This layer knows about `ShardSpec` from Boundary 2's
+coordination module but does not depend on any runtime connector.
 
 **Layer 3 (page_validator)** defines page-level diagnostic types and
 validation functions. It checks that connector-produced pages satisfy
@@ -392,8 +207,8 @@ from becoming a catch-all.
 
 - Value types for enumeration data (`ItemKey`, `ItemRef`, `TokenBytes`,
   `Cursor`, `ScanItem`, `EnumerationPage`).
-- Trait contracts for listing and reading (`EnumerationConnector`,
-  `ReadConnector`).
+- API vocabulary for listing and reading (`ConnectorCapabilities`,
+  `EnumerateError`, `ReadError`).
 - Error classification for operation outcomes (`ErrorClass`,
   `EnumerateError`, `ReadError`).
 - Capability negotiation (`ConnectorCapabilities`).
@@ -456,7 +271,7 @@ and how the ordered vs. unordered distinction shapes the type's API surface.
 
 The `gossip-contracts` crate sits at Tier 0 in the compilation graph: it
 defines interfaces that all other crates depend on. The connector module
-within `gossip-contracts` defines trait contracts and value types. Actual
+within `gossip-contracts` defines API vocabulary and value types. Actual
 connector implementations (S3, GitHub, filesystem) live in separate crates at
 Tier 1.
 
@@ -466,7 +281,7 @@ The dependency direction is strict and uni-directional:
   Tier 0: gossip-contracts
   +------------------------------------------+
   | connector::types     (value wrappers)     |
-  | connector::api       (trait contracts)    |
+  | connector::api       (error & capability types)|
   | connector::page_validator (diagnostics)   |
   | connector::conformance (test harness)     |
   | coordination::*      (shard, cursor, ...)  |
@@ -477,8 +292,8 @@ The dependency direction is strict and uni-directional:
                     |
   Tier 1: gossip-connector-s3, gossip-connector-github, ...
   +------------------------------------------+
-  | impl EnumerationConnector for S3Connector |
-  | impl ReadConnector for S3Connector        |
+  | impl S3Connector { pub fn caps(), ... }  |
+  | impl GitHubConnector { pub fn caps(), ...}|
   +------------------------------------------+
 ```
 
@@ -641,29 +456,23 @@ opts in to features; it never needs to opt out.
 ## Summary
 
 The connector contract layer in `gossip-contracts::connector` provides a
-uniform interface over heterogeneous data sources. Two traits --
-`EnumerationConnector` for listing and `ReadConnector` for content access --
-model operations with independent scaling and failure characteristics. A
-convenience supertrait `ConnectorInstance` provides a single bound when both
-are needed. Four internal layers (types, api, page_validator, conformance)
-separate value validation from trait contracts from page diagnostics from
-end-to-end harness testing. The toxic-byte principle ensures that `Debug` and
-`Display` never emit raw connector bytes, preventing accidental secret
-leakage into logs. Error classification splits cleanly into input validation
-(`ConnectorInputError`) and operation outcomes (`EnumerateError`,
-`ReadError`), with a binary `ErrorClass` that orchestration uses for retry
-decisions. Capability negotiation via `ConnectorCapabilities` lets connectors
-declare features additively against a conservative default.
+uniform interface over heterogeneous data sources. Two method groups --
+enumeration (`caps`, `enumerate_page`, `choose_split_point`) for listing and
+read (`open`, `read_range`) for content access -- model operations with
+independent scaling and failure characteristics. Concrete connector types
+provide these as inherent methods; polymorphism lives at the
+`ScanSourceFactory`/`ScanDriver` layer. Four internal layers (types, api,
+page_validator, conformance) separate value validation from API vocabulary
+from page diagnostics from end-to-end harness testing. The toxic-byte
+principle ensures that `Debug` and `Display` never emit raw connector bytes,
+preventing accidental secret leakage into logs. Error classification splits
+cleanly into input validation (`ConnectorInputError`) and operation outcomes
+(`EnumerateError`, `ReadError`), with a binary `ErrorClass` that
+orchestration uses for retry decisions. Capability negotiation via
+`ConnectorCapabilities` lets connectors declare features additively against a
+conservative default.
 
 Chapter 2 examines each toxic-byte wrapper in detail -- `ItemKey`, `ItemRef`,
 `TokenBytes`, `Cursor`, `ScanItem`, `EnumerationPage`, `Budgets`, and
 `VersionId` -- showing how the `define_toxic_bytes!` macro generates them and
 how named constructors make invalid states unrepresentable.
-
-> **Deprecation note:** The `EnumerationConnector` and `ReadConnector` trait
-> definitions at `api.rs:344-354` carry a deprecation notice: "Deprecated
-> surface: new unified execution paths should use
-> `gossip_scan_driver::ScanSourceFactory` and
-> `gossip_scan_driver::ScanDriver`." The page-by-page traits remain supported
-> for existing Phase III connector callers, but new orchestration paths use
-> scan-driver adapter factories (covered in Chapter 10).

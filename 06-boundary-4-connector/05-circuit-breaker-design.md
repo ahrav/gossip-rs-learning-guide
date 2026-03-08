@@ -296,7 +296,7 @@ This three-rule mapping is the semantic contract between the connector boundary 
 
 Each connector in the system maintains its own independent circuit breaker. This is the fault-isolation property that prevents a single source outage from affecting the entire system. GitHub being down does not affect S3 scanning. S3 rate-limiting does not affect GitLab.
 
-This isolation is a direct consequence of the boundary architecture. Each connector is an independent implementation of the connector traits, with its own configuration, its own rate limiter, and its own circuit breaker. There is no shared state between connectors that could allow a failure in one to propagate to another.
+This isolation is a direct consequence of the boundary architecture. Each connector is an independent implementation with its own configuration, its own rate limiter, and its own circuit breaker. There is no shared state between connectors that could allow a failure in one to propagate to another.
 
 Consider a snapshot where GitHub is experiencing an outage while S3 and GitLab operate normally:
 
@@ -306,7 +306,7 @@ Consider a snapshot where GitHub is experiencing an outage while S3 and GitLab o
 
 The critical moment is Worker 3's experience: no network call, no 30-second timeout. The open circuit rejects the request in microseconds. Worker 3 is immediately freed to do productive work on a different source's shard. The GitHub API receives zero traffic while the circuit is open, giving it maximum opportunity to recover without retry pressure.
 
-The boundary architecture enforces this isolation structurally. Each connector is instantiated independently, holds its own internal state (connection pool, rate limiter, authentication tokens), and communicates with the orchestration layer through the same trait interface (`EnumerationConnector`, `ReadConnector`). The circuit breaker sits inside the connector boundary, not outside it. There is no global "circuit breaker registry" that connectors share. A GitHub connector has a GitHub circuit breaker. An S3 connector has an S3 circuit breaker. The two never interact.
+The boundary architecture enforces this isolation structurally. Each connector is instantiated independently, holds its own internal state (connection pool, rate limiter, authentication tokens), and communicates with the orchestration layer through the same API methods (`enumerate_page`, `open`, and their error types). The circuit breaker sits inside the connector boundary, not outside it. There is no global "circuit breaker registry" that connectors share. A GitHub connector has a GitHub circuit breaker. An S3 connector has an S3 circuit breaker. The two never interact.
 
 This design means that adding a new connector automatically gets fault isolation for free. A future Jira connector, for instance, inherits the per-connector circuit breaker pattern without any changes to the GitHub or S3 connectors. The isolation is a property of the architecture, not of the individual connectors.
 

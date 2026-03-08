@@ -528,7 +528,7 @@ impl<T: CoordinationBackend + RunManagement + ShardClaiming> CoordinationFacade 
 
 **Where used in Gossip-rs**:
 - `CoordinationFacade` / `CoordinationBackend` (in-memory vs persistent)
-- `EnumerationConnector` / `ReadConnector` (GitHub, filesystem, git, etc.)
+- `ScanSourceFactory` / `ScanDriver` (filesystem, git, in-memory adapters)
 - `CommitSink` (`NoOpCommitSink`, `DurableCommitSink`) — per-item commit lifecycle
 - `DoneLedger` (design-stage — planned as a standalone trait; current persistence uses `CommitSink`)
 - `ScanDriver` / `ScanSourceFactory` / `CommitSink` (scan pipeline abstraction)

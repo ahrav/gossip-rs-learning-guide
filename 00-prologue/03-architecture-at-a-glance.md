@@ -144,8 +144,8 @@ See **[→ Chapter 04: Boundary 2, Chapters 7-9](../04-boundary-2-coordination/0
 **Key Components**:
 
 1. **Toxic Byte Value Wrappers**: Type-safe wrappers (`ToxicBlob`, `ToxicStr`) that prevent raw byte content from leaking into safe code paths
-2. **Source Enumeration**: List repositories, files, commits from external APIs via `EnumerationConnector` trait
-3. **Read Connectors**: Fetch content for individual items via `ReadConnector` trait
+2. **Source Enumeration**: List repositories, files, commits from external APIs
+3. **Read Connectors**: Fetch content for individual items
 4. **Page Validation**: Verify API responses are complete, well-formed, and cursors advance monotonically
 5. **Circuit Breakers**: Detect and isolate failing APIs to prevent cascade failures (Closed → Open → HalfOpen state machine)
 6. **In-Memory Connector**: Deterministic connector for testing with configurable fault injection

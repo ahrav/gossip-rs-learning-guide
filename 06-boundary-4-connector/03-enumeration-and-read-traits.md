@@ -1,4 +1,4 @@
-# "Enumerate, Then Read" -- The Runtime Connector Traits
+# The Shared Connector Surface -- Enumeration and Read Methods
 
 *A GitHub connector encounters a 401 Unauthorized response from the GitHub
 API. The connector author classifies the error as `ErrorClass::Retryable` --
@@ -17,7 +17,7 @@ resets. A single miscategorized error -- `Retryable` instead of `Permanent`
 
 ---
 
-## Why Connector Traits Exist
+## Why a Shared Connector Surface Exists
 
 The failure above has a root cause that no amount of retry logic can fix:
 the error classification was wrong at the source. The connector told the
@@ -25,16 +25,154 @@ runtime "try again" when the correct signal was "stop trying." The system
 needs a contract that forces connector authors to make this decision
 explicitly at error-construction time, with no escape hatch for ambiguity.
 
-The `gossip-contracts::connector::api` module defines this contract. It
-provides two traits (`EnumerationConnector` and `ReadConnector`), an error
-taxonomy (`ErrorClass`, `EnumerateError`, `ReadError`), a capability
-declaration struct (`ConnectorCapabilities`), and a convenience supertrait
-(`ConnectorInstance`). Together, these types form the runtime boundary
-between connector implementations and the scan pipeline that drives them.
+The `gossip-contracts::connector::api` module defines the error taxonomy
+(`ErrorClass`, `EnumerateError`, `ReadError`) and the capability declaration
+struct (`ConnectorCapabilities`) that underpin this contract. Every connector
+is expected to provide the same five inherent methods -- `caps()`,
+`enumerate_page()`, `choose_split_point()`, `open()`, `read_range()` -- that
+form a shared surface for enumeration and content access.
 
 Chapter 2 defined the value types (`ScanItem`, `EnumerationPage`, `Budgets`,
-`Cursor`) that flow through these traits. This chapter defines the traits
-themselves -- the behavioral contracts that connector authors must satisfy.
+`Cursor`) that flow through these methods. This chapter defines the methods
+themselves and the error and capability types that govern their behavior.
+
+---
+
+## The Five-Method Convention
+
+Every connector struct exposes the same set of inherent methods. These are
+not formalized as a trait; each connector is a concrete type. Polymorphism
+lives at the `ScanSourceFactory` / `ScanDriver` layer (covered in Chapter
+10), where the runtime selects the appropriate factory based on the scan
+assignment's `ConnectorKind`.
+
+The shared surface consists of two groups: **enumeration methods** that
+traverse metadata and **read methods** that access item content.
+
+### Enumeration Methods
+
+```rust
+// From InMemoryDeterministicConnector (identical signatures on FilesystemConnector)
+
+pub fn caps(&self) -> ConnectorCapabilities {
+    ConnectorCapabilities {
+        seek_by_key: true,
+        token_resume: self.emit_tokens,
+        range_read: true,
+        split_hints: true,
+    }
+}
+
+pub fn enumerate_page(
+    &mut self,
+    shard: &ShardSpec,
+    cursor: &Cursor,
+    budgets: Budgets,
+) -> Result<EnumerationPage, EnumerateError> {
+    // ...
+}
+
+pub fn choose_split_point(
+    &mut self,
+    shard: &ShardSpec,
+    cursor: &Cursor,
+    _budgets: Budgets,
+) -> Result<Option<ItemKey>, EnumerateError> {
+    // ...
+}
+```
+
+- **`caps(&self) -> ConnectorCapabilities`** -- Returns the static feature
+  profile. Takes `&self` (not `&mut self`) because capability queries must
+  not mutate connector state. Called during planning, before any enumeration
+  begins.
+
+- **`enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`**
+  -- The core operation. Takes a `ShardSpec` (the key range to enumerate), a
+  `Cursor` (the resumption point), and `Budgets` (advisory limits). Returns
+  an `EnumerationPage` containing items and a continuation cursor, or an
+  `EnumerateError`. The `&mut self` receiver allows connectors to maintain
+  internal state (connection pools, pagination tokens, rate-limit trackers).
+
+- **`choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`**
+  -- An optional method for connectors that can suggest natural partition
+  boundaries. Connectors that do not support split hints return `Ok(None)`.
+  Connectors that declare `split_hints: true` in their capabilities must
+  provide a meaningful implementation.
+
+### Read Methods
+
+```rust
+// From InMemoryDeterministicConnector (identical signatures on FilesystemConnector)
+
+pub fn open(
+    &mut self,
+    item_ref: &ItemRef,
+    _budgets: Budgets,
+) -> Result<Box<dyn io::Read + Send>, ReadError> {
+    // ...
+}
+
+pub fn read_range(
+    &mut self,
+    item_ref: &ItemRef,
+    offset: u64,
+    dst: &mut [u8],
+    budgets: Budgets,
+) -> Result<usize, ReadError> {
+    // ...
+}
+```
+
+- **`open(&mut self, item_ref, budgets) -> Result<Box<dyn Read + Send>, ReadError>`**
+  -- Opens an item for sequential reading. The return type is a boxed trait
+  object. This is an intentional design decision: boxing allows the caller to
+  work with readers uniformly without knowing the concrete type, and the heap
+  allocation is acceptable because `open` sits on the WARM path -- called
+  once per item, not once per byte. The IO cost of the subsequent read
+  dwarfs the allocation cost.
+
+  The `'static` lifetime requirement on the reader is also intentional. The
+  reader must own its resources (file handles, HTTP clients, buffers). It
+  cannot borrow from the connector's `&self`, because the caller may hold
+  the reader across multiple calls to the connector.
+
+- **`read_range(&mut self, item_ref, offset, dst, budgets) -> Result<usize, ReadError>`**
+  -- An optional random-access read path. Connectors without native range
+  support return `ReadError::unsupported("range_read")`. The overflow safety
+  requirement is explicit: implementations must use
+  `offset.checked_add(dst.len() as u64)` before computing the end position.
+  This prevents a u64 arithmetic overflow when `offset` is near `u64::MAX`
+  and `dst` has nonzero length.
+
+### Why Inherent Methods Instead of Traits
+
+Connector polymorphism does not live at the individual connector level. Each
+connector is a concrete struct -- `InMemoryDeterministicConnector`,
+`FilesystemConnector`, `GitConnector` -- and the runtime never holds a `dyn
+Connector` of any kind.
+
+Instead, polymorphism lives one layer up. The `ScanSourceFactory` trait in
+`gossip-scan-driver` maps `Assignment`s to source-specific `ScanDriver`s.
+Each factory validates the assignment's `ConnectorKind`, constructs the
+appropriate concrete connector internally, and returns a `Box<dyn
+ScanDriver>`. The `ScanDriver::run` method receives the scanner engine,
+execution config, event output sink, commit sink, and cancellation token --
+a richer interface than a page-by-page enumeration model could express.
+
+The three factories are:
+
+- **`FilesystemScanSourceFactory`** -- Bridges filesystem assignments to
+  `parallel_scan_dir` from the scanner-scheduler crate.
+- **`GitScanSourceFactory`** -- Bridges git assignments to `run_git_scan`
+  from the scanner-git crate.
+- **`InMemoryScanSourceFactory`** -- Bridges in-memory test datasets to a
+  sequential commit-sink lifecycle driver.
+
+The shared five-method convention is a structural pattern, not a compiler-
+enforced contract. Connector authors follow it by convention; the
+`ScanSourceFactory` adapter layer is the point where the compiler enforces
+type correctness.
 
 ---
 
@@ -384,9 +522,9 @@ returns the original unsanitized value -- the sanitization boundary is at
 
 ## ConnectorCapabilities -- The Static Feature Declaration
 
-Before the runtime calls any trait method, it needs to know what the
+Before the runtime calls any connector method, it needs to know what the
 connector supports. `ConnectorCapabilities` is a plain struct of four
-boolean flags, declared at registration time.
+boolean flags, declared at construction time.
 
 Here is the definition from `api.rs`:
 
@@ -448,14 +586,13 @@ Field-by-field:
   mechanisms.
 
 - **`range_read: bool`** -- Controls whether the `read_range()` method is
-  implemented. When `false`, the default `read_range()` implementation
-  returns `ReadError::unsupported("range_read")`. The runtime must fall back
-  to reading entire items via `open()`.
+  implemented. When `false`, `read_range()` returns
+  `ReadError::unsupported("range_read")`. The runtime must fall back to
+  reading entire items via `open()`.
 
 - **`split_hints: bool`** -- Controls whether the connector can suggest
   split points for dynamic re-sharding. When `true`, the
-  `choose_split_point()` method must be overridden (enforced by a
-  `debug_assert!` in the default implementation).
+  `choose_split_point()` method provides meaningful split candidates.
 
 The `Default` implementation sets all four flags to `false`. This is the
 conservative choice: a connector that declares no capabilities still works
@@ -475,312 +612,38 @@ fn default_caps_are_conservative() {
 
 ---
 
-## EnumerationConnector -- The Listing Contract
+## The Execution Path: ScanSourceFactory and ScanDriver
 
-The first of the two runtime traits handles metadata traversal: listing
-items within a shard range, page by page.
+The five inherent methods on each connector are not called directly by the
+scan orchestration layer. The execution path goes through `ScanSourceFactory`
+and `ScanDriver`, both defined in the `gossip-scan-driver` crate.
 
-Here is the definition from `api.rs`:
+The `ScanSourceFactory` trait has a single method:
 
 ```rust
-/// Runtime contract for connector enumeration/listing operations.
+/// Factory that maps Assignments to source-specific ScanDrivers.
 ///
-/// This trait is intentionally separate from [`ReadConnector`]: some backends
-/// can list metadata efficiently but have different cost/failure behavior for
-/// content reads. Keeping the surfaces split lets orchestration compose them
-/// independently, while [`ConnectorInstance`] provides a shorthand bound when
-/// both are required.
-pub trait EnumerationConnector: Send {
-    /// Advertise connector capabilities used by orchestration planning.
-    ///
-    /// This is a declarative, static profile for the configured
-    /// connector instance. It should align with method behavior, but callers
-    /// must still handle runtime `unsupported`/policy errors.
-    fn caps(&self) -> ConnectorCapabilities;
-
-    /// Enumerate one page of items for `shard` from `cursor` under `budgets`.
-    ///
-    /// Returns scan items plus the continuation cursor for the next request
-    /// (see [`EnumerationPage`]). Empty pages are valid and carry meaning
-    /// through the returned cursor state.
-    ///
-    /// # Budget enforcement
-    ///
-    /// [`Budgets`] values are **advisory at this trait layer**. Connector
-    /// implementations **should** honor [`Budgets::max_items`] as an upper
-    /// bound on the returned page length, but callers **must not** assume
-    /// compliance. The runtime orchestration layer is responsible for
-    /// enforcement: it **may** truncate excess items, apply backpressure,
-    /// or terminate a misbehaving connector.
-    fn enumerate_page(
-        &mut self,
-        shard: &ShardSpec,
-        cursor: &Cursor,
-        budgets: Budgets,
-    ) -> Result<EnumerationPage, EnumerateError>;
-
-    /// Optional split-point hint for dynamic shard subdivision.
-    ///
-    /// Default behavior is `Ok(None)`, indicating "no hint available". Keep
-    /// this default unless the connector can provide useful, low-risk split
-    /// candidates. Returned hints are advisory and may be ignored by callers.
-    /// Runtime callers **should** validate that returned keys fall within
-    /// the shard's key range before acting on them.
-    ///
-    /// # Capability consistency
-    ///
-    /// The default implementation includes a `debug_assert!` that fires when
-    /// [`caps().split_hints`](ConnectorCapabilities::split_hints) is `true`
-    /// but this method has not been overridden. This catches a misconfiguration
-    /// where the connector advertises split-hint support without providing an
-    /// implementation. Connectors that override this method **must** also
-    /// return `split_hints: true` from [`caps`](EnumerationConnector::caps).
-    fn choose_split_point(
-        &mut self,
-        _shard: &ShardSpec,
-        _cursor: &Cursor,
-        _budgets: Budgets,
-    ) -> Result<Option<ItemKey>, EnumerateError> {
-        debug_assert!(
-            !self.caps().split_hints,
-            "connector advertises split_hints but does not override choose_split_point"
-        );
-        Ok(None)
-    }
+/// The runtime selects a factory based on Assignment::connector_kind,
+/// then calls driver_for_assignment to obtain a boxed driver ready
+/// to execute.
+pub trait ScanSourceFactory: Send {
+    fn driver_for_assignment(&self, assignment: &Assignment) -> Result<Box<dyn ScanDriver>>;
 }
 ```
 
-Three methods, one required, two with defaults:
+Each factory implementation validates the assignment's `ConnectorKind`,
+constructs the appropriate concrete connector, and returns a `Box<dyn
+ScanDriver>` that encapsulates the full scan lifecycle. The `ScanDriver`
+receives the scanner engine, execution config, event output sink, commit
+sink, and cancellation token -- a richer interface than a page-by-page
+enumeration model could express.
 
-- **`caps(&self) -> ConnectorCapabilities`** -- Returns the static feature
-  profile. Takes `&self` (not `&mut self`) because capability queries must
-  not mutate connector state. Called during planning, before any enumeration
-  begins.
-
-- **`enumerate_page(&mut self, ...) -> Result<EnumerationPage, EnumerateError>`**
-  -- The core operation. Takes a `ShardSpec` (the key range to enumerate), a
-  `Cursor` (the resumption point), and `Budgets` (advisory limits). Returns
-  an `EnumerationPage` containing items and a continuation cursor, or an
-  `EnumerateError`. The `&mut self` receiver allows connectors to maintain
-  internal state (connection pools, pagination tokens, rate-limit trackers).
-
-- **`choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`**
-  -- An optional method for connectors that can suggest natural partition
-  boundaries. The default returns `Ok(None)`. The `debug_assert!` in the
-  default body catches a specific misconfiguration: if a connector declares
-  `split_hints: true` in its capabilities but forgets to override this
-  method, the assertion fires in debug builds.
-
-The `Send` bound on the trait enables connector instances to be transferred
-between threads. The orchestration layer may move a connector to a worker
-thread for parallel shard processing.
-
----
-
-## ReadConnector -- The Content Access Contract
-
-The second trait handles item content retrieval. It is intentionally separate
-from `EnumerationConnector` because listing metadata and reading content
-have fundamentally different cost profiles.
-
-Here is the definition from `api.rs`:
-
-```rust
-/// Runtime contract for connector item reads.
-///
-/// This surface is split from [`EnumerationConnector`] so orchestration can
-/// reason separately about metadata traversal and payload IO costs.
-pub trait ReadConnector: Send {
-    /// Open an item for sequential read access.
-    ///
-    /// # Return type: `Box<dyn Read + Send>`
-    ///
-    /// The boxed trait object is intentional: it preserves object safety so
-    /// callers can work with `dyn ReadConnector` at runtime (connector
-    /// polymorphism). The heap allocation is acceptable because `open` sits
-    /// on the **WARM** read path — called once per item, not per byte —
-    /// and the IO cost of the subsequent read dominates.
-    ///
-    /// The returned reader must be self-contained (`'static`): implementations
-    /// cannot borrow from `&self` or other local references. Readers must own
-    /// their resources (e.g., an open file handle, a cloned HTTP client, or an
-    /// `Arc`-backed buffer).
-    ///
-    /// # Budget enforcement
-    ///
-    /// [`Budgets`] values are **advisory at this trait layer**. Connector
-    /// implementations **should** respect budget hints (e.g., for chunked
-    /// fetching or deadline-aware reads), but callers **must not** assume
-    /// compliance. The runtime orchestration layer is responsible for
-    /// enforcement: it **must** wrap the returned reader in a size-bounded,
-    /// deadline-aware adapter before passing it to downstream consumers.
-    ///
-    /// Callers may drop the reader at any point; implementations must ensure
-    /// resource cleanup via [`Drop`], not via read-to-completion.
-    ///
-    /// # Item reference affinity
-    ///
-    /// `item_ref` **must** originate from an [`EnumerationPage`] produced by
-    /// this connector instance (or a compatible instance backed by the same
-    /// data source). Passing an [`ItemRef`] obtained from a different
-    /// connector type is a caller error and may produce garbage reads or
-    /// opaque failures.
-    fn open(
-        &mut self,
-        item_ref: &ItemRef,
-        budgets: Budgets,
-    ) -> Result<Box<dyn io::Read + Send>, ReadError>;
-
-    /// Optional range-read fast path.
-    ///
-    /// Writes up to `dst.len()` bytes from `item_ref` starting at `offset`
-    /// into `dst`, returning the number of bytes written. Implementations
-    /// **must** return a value `<= dst.len()`. Runtime callers **should**
-    /// defensively clamp before using the value as a slice bound.
-    ///
-    /// # Overflow safety
-    ///
-    /// Implementors **must** guard against `offset + dst.len()` overflow
-    /// before performing arithmetic on the combined value. Use
-    /// `offset.checked_add(dst.len() as u64)` and return an appropriate
-    /// [`ReadError`] if the addition wraps.
-    ///
-    /// **EOF behavior:** when `offset` is at or past the end of the item,
-    /// implementations must return `Ok(0)` (consistent with
-    /// [`std::io::Read`] semantics). A short read (returned count less than
-    /// `dst.len()`) does not necessarily indicate EOF -- only `Ok(0)` is
-    /// the definitive end-of-item signal.
-    ///
-    /// Connectors without native range support should keep this default,
-    /// which returns a permanent [`ReadError::unsupported`] classification.
-    fn read_range(
-        &mut self,
-        _item_ref: &ItemRef,
-        _offset: u64,
-        _dst: &mut [u8],
-        _budgets: Budgets,
-    ) -> Result<usize, ReadError> {
-        Err(ReadError::unsupported("range_read"))
-    }
-}
-```
-
-Two methods, one required:
-
-- **`open(&mut self, item_ref, budgets) -> Result<Box<dyn Read + Send>, ReadError>`**
-  -- Opens an item for sequential reading. The return type is a boxed trait
-  object. This is an intentional design decision documented in the doc
-  comment: boxing preserves object safety (callers can use `dyn
-  ReadConnector` without knowing the concrete reader type), and the heap
-  allocation is acceptable because `open` sits on the WARM path -- called
-  once per item, not once per byte. The IO cost of the subsequent read
-  dwarfs the allocation cost.
-
-  The `'static` lifetime requirement on the reader is also intentional. The
-  reader must own its resources (file handles, HTTP clients, buffers). It
-  cannot borrow from the connector's `&self`, because the caller may hold
-  the reader across multiple calls to the connector.
-
-- **`read_range(&mut self, item_ref, offset, dst, budgets) -> Result<usize, ReadError>`**
-  -- An optional random-access read path. The default returns
-  `ReadError::unsupported("range_read")`. The doc comment explicitly calls
-  out an overflow safety requirement: implementations must use
-  `offset.checked_add(dst.len() as u64)` before computing the end position.
-  This prevents a u64 arithmetic overflow when `offset` is near `u64::MAX`
-  and `dst` has nonzero length.
-
----
-
-## ConnectorInstance -- The Pure Bound Alias
-
-When the runtime needs both enumeration and read capabilities from the same
-connector, it uses the `ConnectorInstance` supertrait.
-
-Here is the definition from `api.rs`:
-
-```rust
-/// Convenience supertrait for connector types.
-///
-/// Use this as a bound when a call path requires both enumeration and read
-/// capabilities. The blanket implementation means connector types do not
-/// need an explicit `impl ConnectorInstance`.
-///
-/// # Design constraint
-///
-/// Because there is a blanket `impl<T: EnumerationConnector + ReadConnector
-/// + ?Sized> ConnectorInstance for T` (the `?Sized` bound enables `dyn
-///   ConnectorInstance`), adding required methods to this trait would break the
-/// blanket impl — the empty body cannot supply an implementation for
-/// arbitrary `T`. This is intentional: `ConnectorInstance` is a **pure bound
-/// alias**, not an extension point. New connector surface area belongs on
-/// [`EnumerationConnector`] or [`ReadConnector`] directly.
-pub trait ConnectorInstance: EnumerationConnector + ReadConnector {}
-
-impl<T: EnumerationConnector + ReadConnector + ?Sized> ConnectorInstance for T {}
-```
-
-The blanket impl means any type that implements both `EnumerationConnector`
-and `ReadConnector` automatically satisfies `ConnectorInstance`. Connector
-authors never write `impl ConnectorInstance for MyConnector` -- it is
-derived for free.
-
-The `?Sized` bound on the blanket impl is important: it enables `dyn
-ConnectorInstance` to work. Without `?Sized`, the blanket impl would only
-cover `Sized` types, and trait objects (which are unsized) would not satisfy
-the bound.
-
-The doc comment explains why `ConnectorInstance` must remain empty: adding
-a required method would break the blanket impl, since the blanket cannot
-provide a body for arbitrary `T`. New capabilities belong on
-`EnumerationConnector` or `ReadConnector` directly, where each connector can
-provide its own implementation.
-
-The test suite verifies all three trait objects are object-safe and `Send`:
-
-```rust
-#[test]
-fn traits_are_object_safe_and_send() {
-    fn assert_obj_safe_send<T: Send + ?Sized>() {}
-    assert_obj_safe_send::<dyn EnumerationConnector>();
-    assert_obj_safe_send::<dyn ReadConnector>();
-    assert_obj_safe_send::<dyn ConnectorInstance>();
-}
-```
-
----
-
-## Deprecation Note and the ScanDriver Execution Model
-
-The actual source code at `api.rs:344-354` marks both `EnumerationConnector`
-and `ReadConnector` with a deprecation notice:
-
-> Deprecated surface: new unified execution paths should use
-> `gossip_scan_driver::ScanSourceFactory` and `gossip_scan_driver::ScanDriver`.
-> This trait remains supported for existing Phase III connector callers.
-
-The new execution model works through adapter factories in
-`crates/gossip-connectors/src/scan_driver.rs`. Each concrete connector type
-has a corresponding `ScanSourceFactory` implementation:
-
-- **`FilesystemScanSourceFactory`** -- Bridges filesystem assignments to
-  `parallel_scan_dir` from the scanner-scheduler crate.
-- **`GitScanSourceFactory`** -- Bridges git assignments to `run_git_scan`
-  from the scanner-git crate.
-- **`InMemoryScanSourceFactory`** -- Bridges in-memory test datasets to a
-  sequential commit-sink lifecycle driver.
-
-Each factory implements `ScanSourceFactory::driver_for_assignment`, which
-validates the assignment's `ConnectorKind` and source payload, then returns
-a `Box<dyn ScanDriver>`. The `ScanDriver::run` method receives the scanner
-engine, execution config, event output sink, commit sink, and cancellation
-token -- a richer interface than the page-by-page enumeration model of
-`EnumerationConnector`.
-
-The `EnumerationConnector` and `ReadConnector` traits remain the foundation
-for the connector contract: they define enumeration pages, cursor
-progression, and content access. The `ScanDriver` adapters consume these
-traits internally but present a higher-level interface to the scan
-orchestration layer. Chapter 10 covers the scan-driver adapters in detail.
+The concrete connector's `enumerate_page()`, `open()`, `read_range()`, and
+other methods are called internally by the `ScanDriver` implementation.
+Callers of `ScanDriver::run` never interact with the connector directly.
+This layering means the connector surface can remain a structural convention
+(inherent methods with matching signatures) while the `ScanSourceFactory` /
+`ScanDriver` layer provides the compiler-enforced polymorphism boundary.
 
 ---
 
@@ -793,10 +656,12 @@ the opening failure. `EnumerateError` and `ReadError` are structurally
 identical but nominally distinct, preventing accidental cross-assignment
 between the enumeration and read paths. `ConnectorCapabilities` advertises
 connector features through four boolean flags with conservative defaults.
-`EnumerationConnector` and `ReadConnector` define the behavioral contracts,
-with default implementations and `debug_assert!` guards for capability
-consistency. `ConnectorInstance` is a pure bound alias that composes both
-traits through a blanket impl.
+Every connector provides the same five inherent methods -- `caps()`,
+`enumerate_page()`, `choose_split_point()`, `open()`, `read_range()` --
+following a shared convention. Polymorphism lives at the `ScanSourceFactory`
+/ `ScanDriver` layer, where the runtime selects the appropriate factory
+based on `ConnectorKind` and the compiler enforces type correctness through
+the `ScanDriver` trait.
 
 Chapter 4 introduces the page validator that checks the structural
-correctness of every page these traits produce.
+correctness of every page these methods produce.

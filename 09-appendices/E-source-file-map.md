@@ -127,7 +127,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
 | `crates/gossip-contracts/src/connector/mod.rs` | 06-01, 06-05 | Module structure, public API, re-exports, circuit breaker contract |
-| `crates/gossip-contracts/src/connector/api.rs` | 06-03 | EnumerationConnector, ReadConnector trait definitions |
+| `crates/gossip-contracts/src/connector/api.rs` | 06-03 | Error taxonomy, capability negotiation |
 | `crates/gossip-contracts/src/connector/api_tests.rs` | 06-03 | Connector API tests |
 | `crates/gossip-contracts/src/connector/types.rs` | 06-01, 06-02 | ScanItem, ItemRef, Budgets, ConnectorCapabilities, ErrorClass, ItemKey, TokenBytes |
 | `crates/gossip-contracts/src/connector/types_tests.rs` | 06-01, 06-02 | Connector type tests |
@@ -577,7 +577,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-contracts/src/connector/types.rs` (ItemKey, ItemRef, TokenBytes value wrappers)
 
 - **06-03: Enumeration and Read Traits**
-  - `crates/gossip-contracts/src/connector/api.rs` (EnumerationConnector, ReadConnector trait definitions)
+  - `crates/gossip-contracts/src/connector/api.rs` (Error taxonomy (ErrorClass, EnumerateError, ReadError) and capability negotiation (ConnectorCapabilities))
   - `crates/gossip-contracts/src/connector/api_tests.rs` (Connector API tests)
 
 - **06-04: Page Validation**
