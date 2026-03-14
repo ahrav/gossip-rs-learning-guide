@@ -18,7 +18,6 @@ pub trait ScanDriver: Send {
         engine: Arc<scanner_engine::Engine>,
         cfg: &ScanExecutionConfig,
         out: &dyn EventOutput,
-        git_out: Option<&dyn GitEventOutput>,
         commit: &dyn CommitSink,
         cancel: &CancellationToken,
     ) -> Result<ScanReport>;
@@ -42,8 +41,6 @@ Let us examine each parameter in detail:
 **`&mut self`.** The driver takes a mutable reference to itself. This allows the driver to accumulate state during the scan: the current cursor position, the running count of scanned items and bytes, error recovery metadata, internal buffer pools. The mutable reference also prevents the driver from being shared across threads -- `&mut` is an exclusive reference, so no other code can access the driver while `run` is executing. This exclusivity simplifies the driver's internal implementation: it does not need interior mutability or synchronization for its own state.
 
 **`engine: Arc<scanner_engine::Engine>`.** The detection engine, shared via `Arc`. The engine is immutable after construction (it contains compiled regex patterns, transform configurations, anchor tables, and tuning parameters). Multiple drivers can share the same engine instance, and the runtime uses `OnceLock` to cache the default engine across scans (covered in [Section 14, Chapter 2](../14-scanner-runtime-and-worker/02-engine-construction.md)). The `Arc` wrapper means the driver holds a reference-counted handle, not an owned copy. When the driver drops, the reference count decrements; the engine is freed only when the last reference is dropped.
-
-**`git_out: Option<&dyn GitEventOutput>`.** An optional event sink for git-specific events (commit metadata, identity dictionaries, pack statistics). Filesystem drivers pass `None`; git drivers pass `Some(&sink)`. This avoids polluting the generic `EventOutput` trait with git-only event types while keeping the trait signature uniform across all backends.
 
 **`cfg: &ScanExecutionConfig`.** The execution configuration from [Chapter 1](01-the-execution-seam.md): worker count, checkpoint frequency, filesystem-specific knobs. Passed by shared reference because the driver reads but does not modify it. The driver uses `cfg.workers` to decide how many parallel scan threads to spawn, `cfg.checkpoint_every_items` to decide how frequently to yield progress updates, and `cfg.filesystem` to decide whether to skip archives, skip binary files, or emit findings to the commit sink.
 
@@ -163,7 +160,7 @@ sequenceDiagram
     F-->>R: SourceCapabilities { hints: true, cancel: true }
     R->>F: driver_for_assignment(&assignment)
     F-->>R: Box<dyn ScanDriver>
-    R->>D: run(engine, cfg, out, git_out, commit, cancel)
+    R->>D: run(engine, cfg, out, commit, cancel)
     Note over D: Driver polls cancel.is_cancelled()
     Note over D: between file batches
     D-->>R: ScanReport

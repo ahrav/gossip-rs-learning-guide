@@ -164,7 +164,7 @@ impl TenantSecretKey {
 The `SecretHash` is derived using the tenant's secret key:
 
 ```rust
-// From crates/gossip-contracts/src/identity/finding.rs:286-294
+// From crates/gossip-contracts/src/identity/finding.rs:327-335
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
     let mut h = Hasher::new_keyed(key.as_bytes());
     // Domain tag fed as *data* inside the keyed hasher (not derive-key context),
@@ -280,9 +280,14 @@ coordinator.complete(now, tenant, &lease, final_cursor, op_id)?;
 
 **Boundary 4 (Connector)**:
 ```rust
-// Connectors are tenant-aware
-connector.enumerate(tenant, shard_range, cursor, page_size)?;
-connector.read_item(tenant, item_key)?;
+// Pseudocode — illustrates the tenant isolation principle.
+// Concrete connectors provide four inherent methods:
+//   Planning: caps(), choose_split_point(...)
+//   Read:     open(item_ref, budgets), read_range(...)
+// Tenant scoping is enforced by the caller (coordinator / scan driver),
+// which binds each connector invocation to a tenant's shard assignment.
+let caps = connector.caps();
+let reader = connector.open(&item_ref, budgets)?;
 ```
 
 **Boundary 5 (Persistence)**:

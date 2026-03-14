@@ -14,7 +14,7 @@ A `ShardLease` is the unit of distributed work. It bundles coordination metadata
 /// Lease payload consumed by the distributed runtime.
 #[derive(Clone, Debug)]
 pub struct ShardLease {
-    pub shard_id: String,
+    pub shard_id: Arc<str>,
     pub assignment: Assignment,
     pub tenant_id: TenantId,
     pub tenant_secret_key: TenantSecretKey,
@@ -23,7 +23,7 @@ pub struct ShardLease {
 
 Let us examine each field:
 
-**`shard_id: String`.** The coordinator-assigned shard identifier. This is the key used in the done-ledger, the event recorder, and the commit sink. Recall from the B2 Coordination section that shard IDs are stable across lease reassignments: when Worker 12 loses shard `fs-0xf1` and Worker 15 picks it up, the shard ID is the same. The done-ledger is keyed by shard ID, so checking `is_shard_done("fs-0xf1")` returns the same answer regardless of which worker asks.
+**`shard_id: Arc<str>`.** The coordinator-assigned shard identifier, stored as `Arc<str>` to avoid per-clone heap allocation when the ID is shared across the event sink, commit sink, and coordinator calls. This is the key used in the done-ledger, the event recorder, and the commit sink. Recall from the B2 Coordination section that shard IDs are stable across lease reassignments: when Worker 12 loses shard `fs-0xf1` and Worker 15 picks it up, the shard ID is the same. The done-ledger is keyed by shard ID, so checking `is_shard_done("fs-0xf1")` returns the same answer regardless of which worker asks.
 
 **`assignment: Assignment`.** The complete work unit from the scan-driver boundary, defined in [Section 11, Chapter 2](../11-scan-driver-and-pipeline/02-assignment-model.md). Contains the connector kind (filesystem, git), source payload (path), shard spec (key range), cursor (resume position), and policy hash. The assignment tells the driver *what* to scan; the lease wraps it with coordination context that tells the worker *how* to manage the scan lifecycle.
 
@@ -123,8 +123,8 @@ pub fn run_worker(
             &lease.assignment,
             runtime,
             &RuntimeEngineConfig::default(),
+            &GitExecutionConfig::default(),
             &sink,
-            Some(&sink),
             &commit,
             &cancel,
         )
@@ -173,7 +173,7 @@ stateDiagram-v2
 
 A fresh `CancellationToken` is created for each scan. If the runtime needs to cancel the scan (e.g., because the lease is about to expire), it calls `cancel.cancel()` on this token.
 
-**Phase 4: Scan.** The worker builds a `ScanExecutionConfig` from the budgets via `to_execution_config()`, then enables `emit_findings_to_commit_sink` so that findings flow through the `DurableCommitSink` for identity derivation. It then calls `execute_assignment_with_config`, passing the fully-configured execution config, a default `RuntimeEngineConfig`, both the event sink and a git event sink (the `CoordinationEventSink` implements both traits), the commit sink, and the cancellation token. The function dispatches through the factory and driver seam from [Section 11](../11-scan-driver-and-pipeline/01-the-execution-seam.md). The function returns an `AssignmentOutcome` containing the `ScanReport` and optional `CursorUpdate`.
+**Phase 4: Scan.** The worker builds a `ScanExecutionConfig` from the budgets via `to_execution_config()`, then enables `emit_findings_to_commit_sink` so that findings flow through the `DurableCommitSink` for identity derivation. It then calls `execute_assignment_with_config`, passing the fully-configured execution config, a default `RuntimeEngineConfig`, a default `GitExecutionConfig`, the event sink (the `CoordinationEventSink` implements `GitEventOutput`), the commit sink, and the cancellation token. The function dispatches through the factory and driver seam from [Section 11](../11-scan-driver-and-pipeline/01-the-execution-seam.md). Git scans bypass the `ScanDriver` trait and use a dedicated execution path that receives git-specific configuration directly. The function returns an `AssignmentOutcome` containing the `ScanReport` and optional `CursorUpdate`.
 
 **Phase 5: Complete and mark done.** The worker calls `complete_shard` with the checkpoint and report, then `mark_shard_done` to update the done-ledger. `shards_scanned` is incremented.
 

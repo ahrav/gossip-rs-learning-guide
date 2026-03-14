@@ -686,4 +686,4 @@ The conformance harness encodes eleven invariants that every persistence backend
 
 ## What's Next
 
-The in-memory backends covered in the previous chapter are the first implementations to pass this conformance suite. When a SQLite or PostgreSQL backend is added, it runs the same eleven checks. The conformance harness is the single source of truth for what "correct persistence" means in this system. No backend ships without passing it.
+The in-memory backends covered in the previous chapter are the first implementations to pass this conformance suite. The PostgreSQL backends (`gossip-done-ledger-postgres` and `gossip-findings-postgres`) also pass all eleven checks, validating that the lattice merge, idempotent replay, referential integrity, and redaction contracts hold against a real database with SQL-based upsert logic -- not just in-memory data structures. When additional backends are added (SQLite or otherwise), they run the same eleven checks. The conformance harness is the single source of truth for what "correct persistence" means in this system. No backend ships without passing it.

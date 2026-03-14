@@ -374,7 +374,7 @@ pub fn op_payload_hash(
 }
 ```
 
-The `OP_PAYLOAD_HASHER` is a cached BLAKE3 hasher initialized with the domain string `"OP_PAYLOAD_V1"`. Cloning it is cheap -- BLAKE3 hashers are designed for this pattern. The `op_tag` is a second domain-separation layer specific to each operation type.
+The `OP_PAYLOAD_HASHER` is a cached BLAKE3 hasher initialized with the domain string `"gossip/coord/v1/op-payload"` (the value of the constant `domain::OP_PAYLOAD_V1`). Cloning it is cheap -- BLAKE3 hashers are designed for this pattern. The `op_tag` is a second domain-separation layer specific to each operation type.
 
 ### Per-Operation Hash Functions
 
@@ -531,7 +531,7 @@ Let us trace a complete checkpoint flow to see how all these pieces interact.
 ```
 op_id = OpId::from_csprng()       // e.g., OpId(0x7A3F...)
 cursor = CursorUpdate::with_last_key(b"customer/42")
-hash = hash_checkpoint_payload(&cursor)  // BLAKE3("OP_PAYLOAD_V1" || "checkpoint" || cursor_bytes)
+hash = hash_checkpoint_payload(&cursor)  // BLAKE3("gossip/coord/v1/op-payload" || "checkpoint" || cursor_bytes)
 ```
 
 **Step 2**: Worker sends checkpoint request to coordinator.
@@ -659,6 +659,6 @@ This is the same reasoning used by Stripe's idempotency key implementation: the 
 **Previous**: [Chapter 4: Acquiring and Scanning](04-acquiring-and-scanning.md) explained how the coordinator enforces forward progress within a shard's key range.
 
 **Cross-references**:
-- The fence epoch (Chapter 3) is the primary zombie defense; the op-log is secondary
-- The `Lease` type (Chapter 3) is validated in step 2 of the composition order
+- The fence epoch (Chapter 2) is the primary zombie defense; the op-log is secondary
+- The `Lease` type (Chapter 2) is validated in step 2 of the composition order
 - `CanonicalBytes` encodings for `CursorUpdate` and `ShardSpec` are defined in Chapter 4's coverage of the cursor and shard spec types

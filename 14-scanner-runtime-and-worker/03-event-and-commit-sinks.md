@@ -166,7 +166,7 @@ In distributed mode, events are not written to stdout. They are forwarded to a c
 ```rust
 /// Distributed event sink that forwards events to a coordinator recorder.
 pub struct CoordinationEventSink {
-    shard_id: String,
+    shard_id: Arc<str>,
     recorder: Arc<dyn CoordinationEventRecorder>,
 }
 ```
@@ -291,7 +291,7 @@ The `DurableCommitSink` is the persistence side of the two-channel architecture.
 /// The sink stores per-item metadata from `begin_item` so `upsert_findings`
 /// can use connector-provided version IDs when present.
 pub struct DurableCommitSink {
-    shard_id: String,
+    shard_id: Arc<str>,
     recorder: std::sync::Arc<dyn CoordinationEventRecorder>,
     tenant_id: TenantId,
     tenant_secret_key: TenantSecretKey,
@@ -299,7 +299,7 @@ pub struct DurableCommitSink {
 }
 ```
 
-**`shard_id: String`.** Identifies which shard this sink is processing. Every record persisted through the recorder carries this shard ID.
+**`shard_id: Arc<str>`.** Identifies which shard this sink is processing. Every record persisted through the recorder carries this shard ID. The `Arc<str>` representation avoids per-record cloning overhead when the shard ID is passed to multiple recorder calls.
 
 **`recorder: Arc<dyn CoordinationEventRecorder>`.** The coordinator-facing recorder, shared with the `CoordinationEventSink`. Both sinks write to the same recorder, ensuring events and identity records are routed to the same persistence backend.
 

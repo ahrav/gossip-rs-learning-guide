@@ -191,7 +191,7 @@ graph LR
     style E fill:#9370DB
 ```
 
-**Source:** `finding.rs:286-294`
+**Source:** `finding.rs:327-335`
 
 ```rust
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
@@ -223,7 +223,7 @@ graph TD
     style G fill:#9370DB
 ```
 
-**Source:** `finding.rs:320-322`
+**Source:** `finding.rs:361-363`
 
 ```rust
 pub fn derive_finding_id(inputs: &FindingIdInputs) -> FindingId {
@@ -231,7 +231,7 @@ pub fn derive_finding_id(inputs: &FindingIdInputs) -> FindingId {
 }
 ```
 
-**Inputs struct** (`finding.rs:187-196`):
+**Inputs struct** (`finding.rs:230-239`):
 ```rust
 pub struct FindingIdInputs {
     pub tenant: TenantId,          // Who owns the scan
@@ -259,7 +259,7 @@ graph TD
     style G fill:#BA55D3
 ```
 
-**Source:** `finding.rs:343-345`
+**Source:** `finding.rs:384-386`
 
 ```rust
 pub fn derive_occurrence_id(inputs: &OccurrenceIdInputs) -> OccurrenceId {
@@ -267,7 +267,7 @@ pub fn derive_occurrence_id(inputs: &OccurrenceIdInputs) -> OccurrenceId {
 }
 ```
 
-**Inputs struct** (`finding.rs:231-240`):
+**Inputs struct** (`finding.rs:260-269`):
 ```rust
 pub struct OccurrenceIdInputs {
     pub finding: FindingId,           // Version-stable finding
@@ -377,7 +377,7 @@ pub struct PolicyHashInputs {
 - Commit B: New `FindingId(tenant=X, item=Y, rule=Z, secret=S, version=B)` → triage state = **unknown** (new finding)
 - Security team gets re-alerted for the same accepted test key
 
-**Implementation detail** (`finding.rs:187-196`):
+**Implementation detail** (`finding.rs:230-239`):
 ```rust
 pub struct FindingIdInputs {
     pub tenant: TenantId,
@@ -388,7 +388,7 @@ pub struct FindingIdInputs {
 }
 ```
 
-**Version-specific info goes in `OccurrenceId`** (`finding.rs:231-240`):
+**Version-specific info goes in `OccurrenceId`** (`finding.rs:260-269`):
 ```rust
 pub struct OccurrenceIdInputs {
     pub finding: FindingId,        // Inherited triage state

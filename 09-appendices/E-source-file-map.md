@@ -39,7 +39,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 ### gossip-coordination (Boundary 2 — runtime)
 
-`crates/gossip-coordination/src/` (24 files)
+`crates/gossip-coordination/src/` (25 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -66,6 +66,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/conformance_tests.rs` | 04-12 | Conformance test suite |
 | `crates/gossip-coordination/src/scenario_tests.rs` | 04-12 | Scenario-based integration tests |
 | `crates/gossip-coordination/src/test_fixtures.rs` | 04-12 | Shared test fixtures and helpers |
+| `crates/gossip-coordination/src/shard_limits.rs` | 04-01 | Shard limit constants and capacity constraints |
 | `crates/gossip-coordination/src/split_execution.rs` | 04-06 | Split execution logic |
 
 #### gossip-coordination Simulation Harness
@@ -164,6 +165,54 @@ In-memory reference persistence backends for tests and deterministic simulation.
 | `crates/gossip-persistence-inmemory/src/pending.rs` | 07-05 | Pending commit tracking and notification |
 | `crates/gossip-persistence-inmemory/src/error.rs` | 07-05 | Persistence error types for in-memory backend |
 | `crates/gossip-persistence-inmemory/src/tests.rs` | 07-05 | Integration and behavioral tests |
+
+### gossip-done-ledger-postgres (Boundary 5 — Postgres done-ledger)
+
+`crates/gossip-done-ledger-postgres/src/` (8 files)
+
+Postgres-backed done-ledger implementing the `DoneLedger` trait with the same monotonic lattice merge semantics as the in-memory backend. Production persistence backend for tracking scanned-item status.
+
+| Source File | Primary Chapters | Topics |
+|------------|------------------|---------|
+| `crates/gossip-done-ledger-postgres/src/lib.rs` | 07-02, 07-05 | Crate root, `PostgresDoneLedger` re-export |
+| `crates/gossip-done-ledger-postgres/src/backend.rs` | 07-02 | `PostgresDoneLedger`: Postgres-backed done-ledger implementation |
+| `crates/gossip-done-ledger-postgres/src/error.rs` | 07-02 | Postgres done-ledger error types |
+| `crates/gossip-done-ledger-postgres/src/migrations.rs` | 07-02 | Schema migration management |
+| `crates/gossip-done-ledger-postgres/src/schema.rs` | 07-02 | SQL schema definitions |
+| `crates/gossip-done-ledger-postgres/src/types.rs` | 07-02 | Type conversions for Postgres |
+| `crates/gossip-done-ledger-postgres/src/tests.rs` | 07-05 | Integration tests |
+| `crates/gossip-done-ledger-postgres/src/test_postgres.rs` | 07-05 | Postgres test utilities |
+
+### gossip-findings-postgres (Boundary 5 — Postgres findings sink)
+
+`crates/gossip-findings-postgres/src/` (9 files)
+
+Postgres-backed findings sink implementing the `FindingsSink` trait. Production persistence backend for writing detection findings durably.
+
+| Source File | Primary Chapters | Topics |
+|------------|------------------|---------|
+| `crates/gossip-findings-postgres/src/lib.rs` | 07-03, 07-05 | Crate root, `PostgresFindingsSink` re-export |
+| `crates/gossip-findings-postgres/src/backend.rs` | 07-03 | `PostgresFindingsSink`: Postgres-backed findings writer |
+| `crates/gossip-findings-postgres/src/error.rs` | 07-03 | Postgres findings error types |
+| `crates/gossip-findings-postgres/src/migrations.rs` | 07-03 | Schema migration management |
+| `crates/gossip-findings-postgres/src/read_api.rs` | 07-03 | Read API for querying persisted findings |
+| `crates/gossip-findings-postgres/src/schema.rs` | 07-03 | SQL schema definitions |
+| `crates/gossip-findings-postgres/src/types.rs` | 07-03 | Type conversions for Postgres |
+| `crates/gossip-findings-postgres/src/tests.rs` | 07-05 | Integration tests |
+| `crates/gossip-findings-postgres/src/test_postgres.rs` | 07-05 | Postgres test utilities |
+
+### gossip-pg-common (Boundary 5 — shared Postgres utilities)
+
+`crates/gossip-pg-common/src/` (4 files)
+
+Shared Postgres infrastructure (connection pooling, migration runner, test support) used by both `gossip-done-ledger-postgres` and `gossip-findings-postgres`.
+
+| Source File | Primary Chapters | Topics |
+|------------|------------------|---------|
+| `crates/gossip-pg-common/src/lib.rs` | 07-05 | Crate root, shared Postgres utilities |
+| `crates/gossip-pg-common/src/migration.rs` | 07-05 | Migration runner |
+| `crates/gossip-pg-common/src/types.rs` | 07-05 | Common Postgres type helpers |
+| `crates/gossip-pg-common/src/test_support.rs` | 07-05 | Test support utilities for Postgres backends |
 
 ### gossip-contracts Top-Level
 
@@ -984,6 +1033,9 @@ See `docs/gossip-coordination/coordination-testing.md` for the test tier breakdo
    - `gossip-connectors/src/` = Boundary 4 (implementations)
    - `gossip-contracts/src/persistence/` = Boundary 5 (contracts)
    - `gossip-persistence-inmemory/src/` = Boundary 5 (in-memory backend)
+   - `gossip-done-ledger-postgres/src/` = Boundary 5 (Postgres done-ledger)
+   - `gossip-findings-postgres/src/` = Boundary 5 (Postgres findings sink)
+   - `gossip-pg-common/src/` = Boundary 5 (shared Postgres utilities)
    - `scanner-engine/src/` = Detection engine
    - `scanner-git/src/` = Git scanning pipeline
    - `scanner-scheduler/src/` = Scan scheduler
@@ -1010,13 +1062,13 @@ This source file map provides bidirectional navigation between documentation and
 - **Concept -> Files**: Locate all code related to a topic
 - **File -> Concepts**: Understand what a file is responsible for
 
-Source files are organized across 15 crates:
+Source files are organized across 18 crates:
 
 | Crate / Boundary | Directory | File Count |
 |------------------|-----------|------------|
 | B1: Identity | `gossip-contracts/src/identity/` | 11 files |
 | B2: Coordination (contracts) | `gossip-contracts/src/coordination/` | 8 files |
-| B2: Coordination (runtime) | `gossip-coordination/src/` | 24 files |
+| B2: Coordination (runtime) | `gossip-coordination/src/` | 25 files |
 | B2: Simulation | `gossip-coordination/src/sim/` | 14 files |
 | B2: Coordination (etcd) | `gossip-coordination-etcd/src/` | 8 files |
 | B3: Shard Algebra | `gossip-frontier/src/` | 7 files |
@@ -1033,5 +1085,8 @@ Source files are organized across 15 crates:
 | Worker binary | `gossip-worker/src/` | 1 file |
 | CLI binary | `scanner-rs-cli/src/` | 1 file |
 | Integration tests | `scanner-engine-integration-tests/` | 1 src + test dirs |
+| B5: Done-ledger (Postgres) | `gossip-done-ledger-postgres/src/` | 8 files |
+| B5: Findings (Postgres) | `gossip-findings-postgres/src/` | 9 files |
+| B5: Postgres common | `gossip-pg-common/src/` | 4 files |
 
 Use this appendix as a quick reference when navigating the Gossip-rs learning guide and codebase.

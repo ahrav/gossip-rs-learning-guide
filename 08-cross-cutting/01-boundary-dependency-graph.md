@@ -74,7 +74,7 @@ Each dependency edge represents specific type usage:
 
 ## Crate Structure
 
-The workspace contains 13 crates. The dependency graph maps directly to crate structure:
+The workspace contains 18 crates. The dependency graph maps directly to crate structure:
 
 ```
 crates/
@@ -85,8 +85,13 @@ crates/
 │   └── persistence/                (B5: Persistence contracts — design-stage)
 ├── gossip-coordination/            (B2: Coordination runtime — InMemoryCoordinator, facade, sim/)
 │   └── sim/                        (Deterministic simulation harness)
+├── gossip-coordination-etcd/       (B2: etcd-backed coordination backend)
 ├── gossip-frontier/                (B3: Shard Algebra — key encoding, hints, builder)
 ├── gossip-connectors/              (B4: Connector implementations — filesystem, git, in-memory, scan_driver)
+├── gossip-persistence-inmemory/    (B5: Reference in-memory persistence backends)
+├── gossip-done-ledger-postgres/    (B5: PostgreSQL done-ledger backend)
+├── gossip-findings-postgres/       (B5: PostgreSQL findings-sink backend)
+├── gossip-pg-common/               (Shared PostgreSQL utilities)
 ├── gossip-stdx/                    (Shared data structures: RingBuffer, InlineVec, ByteSlab, etc.)
 ├── gossip-scan-driver/             (Scan driver traits: ScanDriver, ScanSourceFactory, CommitSink)
 ├── scanner-engine/                 (Detection engine: YARA rules, regex, content scanning)
@@ -119,9 +124,9 @@ The dependency direction makes ownership unambiguous:
 ### 3. Compilation Ordering
 Cargo can build crates in topological order:
 1. **Tier 0**: `gossip-stdx` (no workspace dependencies)
-2. **Tier 1**: `gossip-contracts` (depends on `gossip-stdx`)
-3. **Tier 2**: `gossip-coordination`, `gossip-frontier`, `scanner-engine`, `scanner-scheduler` (depend on tier 0-1 crates)
-4. **Tier 3**: `scanner-git` (depends on `scanner-engine`, `scanner-scheduler`, `gossip-stdx`)
+2. **Tier 1**: `gossip-contracts`, `gossip-pg-common` (depend on `gossip-stdx` or external only)
+3. **Tier 2**: `gossip-coordination`, `gossip-coordination-etcd`, `gossip-frontier`, `scanner-engine`, `scanner-scheduler`, `gossip-persistence-inmemory` (depend on tier 0-1 crates)
+4. **Tier 3**: `scanner-git`, `gossip-done-ledger-postgres`, `gossip-findings-postgres` (depend on tier 1-2 crates)
 5. **Tier 4**: `gossip-scan-driver`, `gossip-connectors` (depend on tier 2-3 crates)
 6. **Tier 5**: `gossip-scanner-runtime` (depends on connectors, scan-driver, scheduler, scanner-git)
 7. **Tier 6**: `gossip-worker`, `scanner-rs-cli` (depend on `gossip-scanner-runtime`)
@@ -145,8 +150,11 @@ The actual `Cargo.toml` dependencies between workspace crates:
 ```
 gossip-stdx              → (none — leaf crate)
 gossip-contracts         → gossip-stdx
+gossip-pg-common         → (external deps only — leaf workspace crate)
 gossip-coordination      → gossip-contracts, gossip-stdx
+gossip-coordination-etcd → gossip-contracts, gossip-stdx
 gossip-frontier          → gossip-contracts, gossip-stdx
+gossip-persistence-inmemory → gossip-contracts
 scanner-engine           → gossip-stdx
 scanner-scheduler        → scanner-engine, gossip-stdx
                            (dev: gossip-connectors, gossip-contracts, gossip-stdx[stdx-proptest],
@@ -155,6 +163,8 @@ gossip-scan-driver       → gossip-contracts, scanner-engine, scanner-git, scan
 scanner-git              → scanner-engine, scanner-scheduler, gossip-stdx
 gossip-connectors        → gossip-contracts, gossip-stdx, gossip-scan-driver,
                            scanner-engine, scanner-git, scanner-scheduler
+gossip-done-ledger-postgres → gossip-contracts, gossip-pg-common
+gossip-findings-postgres → gossip-contracts, gossip-pg-common
 gossip-scanner-runtime   → gossip-contracts, gossip-connectors, gossip-scan-driver,
                            scanner-engine, scanner-scheduler, scanner-git
 gossip-worker            → gossip-scanner-runtime

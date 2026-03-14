@@ -79,8 +79,8 @@ graph TD
     subgraph "B4: Connector"
         D[Monotonic<br/>Cursors]
         D --> D1[Forward-only<br/>enumeration]
-        D2[Page Validation]
-        D2 --> D3[Prevents<br/>partial reads]
+        D2[Cursor Advancement]
+        D2 --> D3[Prevents<br/>backward enumeration]
     end
 
     subgraph "B5: Persistence"
@@ -181,7 +181,7 @@ if lease.fence() != record.fence_epoch {
 
 **Why this achieves exactly-once**: Combined with finding deduplication, coverage verification ensures that every item is scanned (no missed secrets) and duplicate scans are harmless (no over-counting).
 
-## B4: Connector (Monotonic Cursors + Page Validation)
+## B4: Connector (Monotonic Cursors)
 
 **Problem**: A worker scans page 17 (cursor=170), writes findings, then crashes. The shard state shows cursor=160 (stale). A new worker resumes from cursor=160, rescans pages 16-20 (re-enumeration).
 
@@ -204,12 +204,12 @@ Note that the error carries byte **lengths** (not raw key data) — this is a de
 
 **Property**: Cursors always move forward. The coordination layer rejects checkpoints whose `last_key` regresses behind the previously recorded `last_key`.
 
-**Page validation** ensures that page reads are complete:
-- Each page is bounded by a cursor checkpoint after all items are processed
-- If a worker crashes mid-page, the cursor has not advanced
-- Resume point is the last checkpointed cursor (not mid-page)
+**Cursor checkpoint discipline** ensures that scan progress is well-defined:
+- Each batch of items is bounded by a cursor checkpoint after all items are processed
+- If a worker crashes mid-batch, the cursor has not advanced
+- Resume point is the last checkpointed cursor (not mid-batch)
 
-**Why this achieves exactly-once**: Forward-only cursor movement prevents re-enumeration. Page boundaries ensure that partial reads don't corrupt state—either a page is fully scanned or not scanned at all.
+**Why this achieves exactly-once**: Forward-only cursor movement prevents re-enumeration. Checkpoint boundaries ensure that partial reads don't corrupt state—either a batch is fully scanned or not scanned at all.
 
 ## B5: Persistence (Done Ledger + Typestate)
 
@@ -361,7 +361,7 @@ Exactly-once semantics is the composition of five boundaries:
 1. **B1 (Identity)**: Content-addressed IDs ensure perfect deduplication
 2. **B2 (Coordination)**: Op-log idempotency + fencing prevent duplicate/stale mutations
 3. **B3 (Shard Algebra)**: Coverage verification ensures no gaps or overlaps
-4. **B4 (Connector)**: Monotonic cursors + page validation prevent re-enumeration
+4. **B4 (Connector)**: Monotonic cursors prevent re-enumeration
 5. **B5 (Persistence)**: Done ledger (object-version-level lattice) + typestate ensure durable completion tracking
 
 **The end-to-end argument**: No single boundary achieves exactly-once. It emerges from their composition.

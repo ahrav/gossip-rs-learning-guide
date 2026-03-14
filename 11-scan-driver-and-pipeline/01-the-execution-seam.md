@@ -4,7 +4,7 @@
 
 ---
 
-The `gossip-scan-driver` crate exists to prevent this class of divergence. At 532 lines, it is one of the smallest crates in the system, and that is deliberate. It defines exactly one execution seam: the contract that every source-specific backend implements and every runtime consumes. CLI mode, distributed mode, and future runtimes all flow through this single boundary. There is no second path.
+The `gossip-scan-driver` crate exists to prevent this class of divergence. At 483 lines, it is one of the smallest crates in the system, and that is deliberate. It defines exactly one execution seam: the contract that every source-specific backend implements and every runtime consumes. CLI mode, distributed mode, and future runtimes all flow through this single boundary. There is no second path.
 
 The crate-level documentation from `lib.rs` captures the pipeline in ASCII:
 
@@ -72,7 +72,7 @@ scanner-git.workspace = true
 scanner-scheduler.workspace = true
 ```
 
-The crate depends on `gossip-contracts` for coordination and identity types (recall from the B2 Coordination section that `ShardSpec` and `Cursor` define the range and resume position for a work unit). It depends on `scanner-engine` only for the `Engine` type reference (the engine is passed to `ScanDriver::run` as an `Arc`). It depends on `scanner-git` for git-specific types (`GitEventOutput`, `GitScanMode`, `MergeDiffMode`) that appear in the driver interface and the `GitExecutionConfig` struct. It depends on `scanner-scheduler` for the `EventOutput` trait (the event output channel for streaming findings and diagnostics). This dependency structure is intentional: the scan-driver crate defines the shared vocabulary that runtimes and backends both use. Adding a new source kind (S3 object scanning, database table scanning) requires implementing the `ScanDriver` and `ScanSourceFactory` traits in a new crate. The scan-driver crate itself changes only if the new source requires new config fields or capabilities.
+The crate depends on `gossip-contracts` for coordination and identity types (recall from the B2 Coordination section that `ShardSpec` and `Cursor` define the range and resume position for a work unit). It depends on `scanner-engine` only for the `Engine` type reference (the engine is passed to `ScanDriver::run` as an `Arc`). It depends on `scanner-scheduler` for the `EventOutput` trait (the event output channel for streaming findings and diagnostics). Git-specific types (`GitEventOutput`, `GitScanMode`, `MergeDiffMode`) and the `GitExecutionConfig` struct live in `gossip-connectors`, not in the scan-driver crate -- git scanning is handled through a dedicated execution path (`execute_git_assignment`) rather than the `ScanDriver` trait. This dependency structure is intentional: the scan-driver crate defines the shared vocabulary that runtimes and backends both use, without pulling git-specific concerns into the interface boundary. Adding a new source kind (S3 object scanning, database table scanning) requires implementing the `ScanDriver` and `ScanSourceFactory` traits in a new crate. The scan-driver crate itself changes only if the new source requires new config fields or capabilities.
 
 ## 2. The Pipeline in Three Stages
 
@@ -82,7 +82,7 @@ The execution pipeline has three stages, each represented by a type or trait in 
 flowchart LR
     A[Assignment] --> B[ScanSourceFactory]
     B --> C[ScanDriver]
-    C --> D["run(engine, cfg, out, git_out, commit, cancel)"]
+    C --> D["run(engine, cfg, out, commit, cancel)"]
     D --> E[ScanReport]
     C --> F["checkpoint_hint()"]
     F --> G["Option&lt;CursorUpdate&gt;"]
@@ -147,7 +147,6 @@ pub struct ScanExecutionConfig {
     pub workers: usize,
     pub checkpoint_every_items: u64,
     pub filesystem: FilesystemExecutionConfig,
-    pub git: GitExecutionConfig,
 }
 
 impl Default for ScanExecutionConfig {
@@ -156,7 +155,6 @@ impl Default for ScanExecutionConfig {
             workers: 1,
             checkpoint_every_items: 1_000,
             filesystem: FilesystemExecutionConfig::default(),
-            git: GitExecutionConfig::default(),
         }
     }
 }
@@ -199,67 +197,7 @@ impl Default for FilesystemExecutionConfig {
 
 **`emit_findings_to_commit_sink: bool`.** When `false` (default), the driver does not call the `CommitSink` methods for findings. This is the CLI mode default: findings go only through the `EventOutput` channel. When `true`, the driver calls `begin_item`, `upsert_findings`, and `finish_item` for each scanned item, enabling the `DurableCommitSink` to derive identity records. The distributed runtime sets this to `true`.
 
-The nesting of `FilesystemExecutionConfig` inside `ScanExecutionConfig` is a design choice. Git-specific knobs live in a parallel nested struct, `GitExecutionConfig`:
-
-```rust
-/// Git-specific runtime knobs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GitExecutionConfig {
-    /// Stable repository identifier used to namespace persisted keys.
-    pub repo_id: u64,
-    /// Git scan mode (diff-history vs ODB-blob fast-path).
-    pub scan_mode: GitScanMode,
-    /// Merge-diff strategy for merge commits.
-    pub merge_diff_mode: MergeDiffMode,
-    /// Optional explicit pack-exec worker override.
-    ///
-    /// When `None`, git driver falls back to [`ScanExecutionConfig::workers`].
-    pub pack_exec_workers: Option<usize>,
-    /// When true, skip binary-class filtering and scan all blobs.
-    pub scan_binary: bool,
-    /// When true, emit identity-dictionary and enriched commit metadata.
-    pub enrich_identities: bool,
-    /// Optional diagnostic output level.
-    pub debug_level: GitDebugLevel,
-    /// Optional tree delta cache size override in MiB.
-    pub tree_delta_cache_mb: Option<u32>,
-    /// Optional engine chunk size override in MiB.
-    pub engine_chunk_mb: Option<u32>,
-}
-
-impl Default for GitExecutionConfig {
-    fn default() -> Self {
-        Self {
-            repo_id: 1,
-            scan_mode: GitScanMode::OdbBlobFast,
-            merge_diff_mode: MergeDiffMode::AllParents,
-            pack_exec_workers: None,
-            scan_binary: false,
-            enrich_identities: false,
-            debug_level: GitDebugLevel::Off,
-            tree_delta_cache_mb: None,
-            engine_chunk_mb: None,
-        }
-    }
-}
-```
-
-The defaults reflect production operational choices: `repo_id: 1` (a placeholder; the runtime overrides this with the actual repository identifier), `scan_mode: GitScanMode::OdbBlobFast` (the high-throughput ODB-blob traversal mode rather than diff-history), and `merge_diff_mode: MergeDiffMode::AllParents` (diff merge commits against all parents for complete coverage). All optional overrides default to `None` (inherit from the top-level config or use backend defaults).
-
-The `GitDebugLevel` enum controls diagnostic verbosity:
-
-```rust
-/// Git-specific debug output level.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GitDebugLevel {
-    #[default]
-    Off,
-    Stats,
-    Perf,
-}
-```
-
-This keeps the top-level struct focused on shared concerns (workers, checkpoints) while allowing source-specific concerns to live in their own namespace.
+The nesting of `FilesystemExecutionConfig` inside `ScanExecutionConfig` is a design choice that keeps the top-level struct focused on shared concerns (workers, checkpoints) while allowing source-specific concerns to live in their own namespace. Git-specific configuration (`GitExecutionConfig`) lives in `gossip-connectors` and is passed directly to the git scan entry point, rather than being embedded in the shared `ScanExecutionConfig`. This separation reflects the architectural decision to decouple git scanning from the `ScanDriver` trait: git scans use a dedicated execution path that receives git configuration directly.
 
 ## 5. The ScanReport
 
@@ -344,7 +282,7 @@ sequenceDiagram
 
     R->>F: driver_for_assignment(&assignment)
     F-->>R: Box<dyn ScanDriver>
-    R->>D: run(engine, cfg, out, git_out, commit, cancel)
+    R->>D: run(engine, cfg, out, commit, cancel)
     loop For each source item
         D->>E: scan(chunk)
         E-->>D: findings
@@ -368,14 +306,14 @@ fn execute_assignment_with_config(
     assignment: &Assignment,
     config: ScanExecutionConfig,
     engine_config: &RuntimeEngineConfig,
-    out: &dyn EventOutput,
-    git_out: Option<&dyn GitEventOutput>,
+    git_cfg: &GitExecutionConfig,
+    out: &dyn GitEventOutput,
     commit: &dyn CommitSink,
     cancel: &CancellationToken,
 ) -> Result<AssignmentOutcome, ScanRuntimeError> {
     let mut driver = driver_for_assignment(assignment)?;
     let report = driver
-        .run(runtime_engine(engine_config)?, &config, out, git_out, commit, cancel)
+        .run(runtime_engine(engine_config)?, &config, out, commit, cancel)
         .map_err(ScanRuntimeError::Driver)?;
 
     Ok(AssignmentOutcome {
@@ -386,7 +324,7 @@ fn execute_assignment_with_config(
 }
 ```
 
-Every scan -- filesystem or git, CLI or distributed -- passes through this single function. The `driver_for_assignment` call dispatches to the correct factory based on `ConnectorKind`. The `runtime_engine` call obtains a cached or freshly built engine. The `run` call executes the scan. The `checkpoint_hint` call retrieves the cursor. One function, one path, one seam.
+Every scan -- filesystem or git, CLI or distributed -- passes through this single function. The `driver_for_assignment` call dispatches to the correct factory based on `ConnectorKind`. The `runtime_engine` call obtains a cached or freshly built engine. The `run` call executes the scan. The `checkpoint_hint` call retrieves the cursor. Git scans bypass the `ScanDriver` trait entirely and use a dedicated execution path (`execute_git_assignment`) that receives `GitExecutionConfig` and `GitEventOutput` directly, keeping git-specific concerns out of the shared driver interface. One function, one path, one seam.
 
 ## What's Next
 

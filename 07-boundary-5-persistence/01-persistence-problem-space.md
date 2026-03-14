@@ -133,7 +133,7 @@ From `gossip-scanner-runtime/src/commit_sink.rs`:
 
 ```rust
 pub struct DurableCommitSink {
-    shard_id: String,
+    shard_id: Arc<str>,
     recorder: std::sync::Arc<dyn CoordinationEventRecorder>,
     tenant_id: TenantId,
     tenant_secret_key: TenantSecretKey,
@@ -181,7 +181,7 @@ The key transformation: `CommitSink::FindingRecord` (five flat fields, no tenant
                 ▼                         ▼
 ┌───────────────────────────────────────────────────────────┐
 │              Concrete Backends                             │
-│  (In-memory test doubles, SQLite, future PostgreSQL)      │
+│  (In-memory test doubles, SQLite, PostgreSQL)             │
 └───────────────────────────────────────────────────────────┘
 ```
 
@@ -549,3 +549,14 @@ This chapter mapped the problem space and the full type inventory. The remaining
 - **Chapter 3: The Findings Sink** -- The three-layer data model in depth. Content-addressed identity derivation, referential integrity validation, `FindingsUpsertBatch` construction, and the write-only API surface.
 - **Chapter 4: The Commit Protocol** -- `PageCommit<S>` typestate machine. Compile-time ordering enforcement, receipt validation, `wait_*` vs `record_*` transitions, and error handling when backend waits fail.
 - **Chapter 5: In-Memory Test Doubles** -- Building backends that pass the conformance harness without touching disk.
+- **Chapter 6: Persistence Conformance** -- The reusable conformance harness that every backend must pass.
+
+### PostgreSQL Backends
+
+Three crates provide PostgreSQL-backed persistence, proving the contract traits work against a real database -- not just in-memory test doubles:
+
+- **`gossip-done-ledger-postgres`** -- PostgreSQL done-ledger backend. Implements `DoneLedger` with proper lattice-merge semantics using SQL `GREATEST` for status rank and per-field maximums.
+- **`gossip-findings-postgres`** -- PostgreSQL findings backend. Implements `FindingsSink` with idempotent upserts across all three record layers (findings, occurrences, observations) using `ON CONFLICT` merge logic.
+- **`gossip-pg-common`** -- Shared PostgreSQL utilities: connection pool management, migration runner, and common schema helpers used by both backends.
+
+Both the done-ledger and findings Postgres backends pass the same eleven-check conformance harness described in Chapter 6, validating lattice merge, idempotent replay, referential integrity, and redaction against a live database.

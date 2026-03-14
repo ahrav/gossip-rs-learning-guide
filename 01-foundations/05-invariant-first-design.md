@@ -345,7 +345,7 @@ fn golden_vectors_for_domain_constants() {
     assert_eq!(SECRET_HASH_V1, "gossip/secret-hash/v1");
     assert_eq!(ITEM_ID_V1, "gossip/item-id/v1");
     assert_eq!(SPLIT_ID_V1, "gossip/coord/v1/split-id");
-    // ... (13 total)
+    // ... (15 total)
 }
 ```
 
@@ -358,19 +358,19 @@ Some invariants can be enforced at compile time using Rust's type system and con
 ### Example: Domain Constant Count
 
 ```rust
-pub const ALL: [&str; 13] = [
+pub const ALL: [&str; 15] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
-    // ... (13 total)
+    // ... (15 total)
 ];
 ```
 
-If you add a 14th domain constant but forget to add it to the array, **compilation fails**:
+If you add a 16th domain constant but forget to add it to the array, **compilation fails**:
 
 ```
 error: mismatched types
-  expected array `[&str; 13]`
-  found array `[&str; 14]`
+  expected array `[&str; 15]`
+  found array `[&str; 16]`
 ```
 
 No runtime check needed - the compiler enforces the invariant.

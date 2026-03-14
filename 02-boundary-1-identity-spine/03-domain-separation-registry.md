@@ -205,7 +205,7 @@ fn all_constants_have_reasonable_length() {
 
 **Why:** The hasher is already in keyed mode with the `TenantSecretKey` as the MAC key. The domain tag acts as a **versioning prefix** to separate this derivation from any other use of the same tenant key.
 
-**Source** (`finding.rs:286-294`):
+**Source** (`finding.rs:327-335`):
 ```rust
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
     let mut h = Hasher::new_keyed(key.as_bytes());

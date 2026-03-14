@@ -107,7 +107,7 @@ CoordinationFacade
 - **S8 (RunTerminalIrreversibility)**: Terminal run states (`Done`, `Failed`, `Cancelled`) never revert
 - **S9 (CooldownViolation)**: A worker must not claim twice within `cooldown_interval` ticks
 
-**Status**: ✅ **Fully implemented** (22 source files in gossip-coordination — 14 core + 8 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
+**Status**: ✅ **Fully implemented** (25 source files in gossip-coordination — 17 core + 8 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
 
 **Code**: `crates/gossip-contracts/src/coordination/` and `crates/gossip-coordination/`
 
@@ -131,7 +131,7 @@ See **[→ Chapter 04: Boundary 2](../04-boundary-2-coordination/)** for complet
 - **Canonicality**: Each logical key has exactly one encoded representation
 - **Zero-allocation design**: Range arithmetic operates on borrowed byte slices; no heap allocation on the hot path
 
-**Status**: ✅ **Fully implemented** (4 source files, 1,842 lines of tests, `#![forbid(unsafe_code)]`)
+**Status**: ✅ **Fully implemented** (7 source files, 1,842 lines of tests, `#![forbid(unsafe_code)]`)
 
 **Code**: `crates/gossip-frontier/src/`
 
@@ -139,15 +139,14 @@ See **[→ Chapter 04: Boundary 2, Chapters 7-9](../04-boundary-2-coordination/0
 
 ## Boundary 4: Connector
 
-**Purpose**: Enumerate scan items from external sources (GitHub, GitLab, S3, etc.) and handle API failures gracefully. Provide type-safe value wrappers for toxic byte content and page-level validation for cursor-based enumeration.
+**Purpose**: Enumerate scan items from external sources (GitHub, GitLab, S3, etc.) and handle API failures gracefully. Provide type-safe value wrappers for toxic byte content and monotonic cursor advancement for deterministic enumeration.
 
 **Key Components**:
 
 1. **Toxic Byte Value Wrappers**: Type-safe wrappers (`ToxicBlob`, `ToxicStr`) that prevent raw byte content from leaking into safe code paths
-2. **Source Enumeration**: List repositories, files, commits from external APIs
-3. **Read Connectors**: Fetch content for individual items
-4. **Page Validation**: Verify API responses are complete, well-formed, and cursors advance monotonically
-5. **Circuit Breakers**: Detect and isolate failing APIs to prevent cascade failures (Closed → Open → HalfOpen state machine)
+2. **Source Enumeration**: Plan and split work via connector capabilities (`caps`, `choose_split_point`)
+3. **Read Connectors**: Fetch content for individual items (`open`, `read_range`)
+4. **Circuit Breakers**: Detect and isolate failing APIs to prevent cascade failures (Closed → Open → HalfOpen state machine)
 6. **In-Memory Connector**: Deterministic connector for testing with configurable fault injection
 7. **Filesystem Connector**: Production connector for local directory tree enumeration
 8. **Git Connector**: Production connector for git repository scanning
@@ -170,7 +169,7 @@ stateDiagram-v2
 - **INV-S31**: Enumeration is deterministic (same items in same order)
 - **INV-L30**: If source API is healthy, enumeration eventually completes
 
-**Status**: ✅ **Fully implemented** (5 contract files in `gossip-contracts`, 7 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, scan-driver adapter, split estimator, and lib, conformance harness, page validator, 8 guide chapters covering ~34,440 words)
+**Status**: ✅ **Fully implemented** (5 contract files in `gossip-contracts`, 11 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, scan-driver adapter, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -202,9 +201,9 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 | Boundary | Status | Files | Invariants | Tests |
 |----------|--------|-------|------------|-------|
 | **B1: Identity** | ✅ Fully Implemented | 11 | 37 | Property tests, golden vectors, unit tests |
-| **B2: Coordination** | ✅ Fully Implemented | 22 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
-| **B3: Shard Algebra** | ✅ Fully Implemented | 4 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
-| **B4: Connector** | ✅ Fully Implemented | 5 contracts + 7 impl + 4 contract tests | 3 | Conformance harness, unit tests |
+| **B2: Coordination** | ✅ Fully Implemented | 25 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
+| **B3: Shard Algebra** | ✅ Fully Implemented | 7 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
+| **B4: Connector** | ✅ Fully Implemented | 5 contracts + 11 impl + 4 contract tests | 3 | Conformance harness, unit tests |
 | **B5: Persistence** | 🔧 Contracts + In-Memory Backend | 7 impl files | 3 | Reference in-memory backend |
 
 ### Implementation Progress
@@ -233,7 +232,7 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 - `gossip-frontier` crate with `KeyEncoding` trait, `PathKey`, `ManifestRowKey`
 - Range arithmetic: `prefix_successor`, `byte_midpoint`
 - Wire framing: `ShardHint`, `ShardMetadata`, `PreallocShardBuilder`
-- 4 source files, 1,842 lines of tests, `#![forbid(unsafe_code)]`
+- 7 source files, 1,842 lines of tests, `#![forbid(unsafe_code)]`
 
 **Phase 3 (Complete)**: B4 Connector
 
@@ -241,9 +240,9 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 - Three concrete implementations: `InMemoryConnector`, `FilesystemConnector`, and `GitConnector` in `gossip-connectors`
 - Split estimator for dynamic shard splitting hints
 - Scan-driver adapter for source-specific execution backends
-- Conformance harness and page validator
+- Conformance harness
 - Deterministic enumeration with split hints
-- 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, validation, circuit breakers, all connectors, and conformance
+- 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, cursor advancement, circuit breakers, all connectors, and conformance
 
 **Phase 4 (Complete)**: Scanner Pipeline
 

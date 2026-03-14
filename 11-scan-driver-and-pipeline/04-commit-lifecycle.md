@@ -190,7 +190,7 @@ The scan-driver crate defines exactly these types at its public boundary:
 | `ScanDriver` | Trait | N/A | Source-specific execution backend |
 | `ScanSourceFactory` | Trait | N/A | Assignment-to-driver translation |
 
-532 lines. Three traits. Fifteen concrete types. This is the entire interface between runtime orchestration and source-specific scanning. Every type exists to prevent a specific failure mode: divergent runtimes (`ScanDriver` + `ScanSourceFactory` enforce one execution path), ambiguous work descriptions (`Assignment` + `ConnectorKind` make the source family explicit), unchecked cancellation (`CancellationToken` + `SourceCapabilities` declare cooperative behavior), silent finding loss (`CommitSink` + `FindingRecord` persist findings with stable identities), and untracked progress (`CursorUpdate` + `ScanReport` carry checkpoint and accounting data).
+483 lines. Three traits. Fifteen concrete types. This is the entire interface between runtime orchestration and source-specific scanning. Every type exists to prevent a specific failure mode: divergent runtimes (`ScanDriver` + `ScanSourceFactory` enforce one execution path), ambiguous work descriptions (`Assignment` + `ConnectorKind` make the source family explicit), unchecked cancellation (`CancellationToken` + `SourceCapabilities` declare cooperative behavior), silent finding loss (`CommitSink` + `FindingRecord` persist findings with stable identities), and untracked progress (`CursorUpdate` + `ScanReport` carry checkpoint and accounting data).
 
 ## What's Next
 

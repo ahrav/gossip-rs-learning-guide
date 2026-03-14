@@ -75,15 +75,15 @@ Each failure scenario from the learning guide motivated one or more of these inv
 | Chapter | Failure Scenario | Invariant(s) |
 |---------|-----------------|--------------|
 | Ch 1: Problem Space | Completed shard re-activated | S3 (Terminal Irreversibility) |
-| Ch 2: State Machine | Zombie worker writes after lease expiry | S1 (Mutual Exclusion), S2 (Fence Monotonicity) |
-| Ch 3: Fencing | Stale epoch bypasses fence check | S2 (Fence Monotonicity) |
-| Ch 4: Cursors | Cursor regresses after ownership transfer | S5 (Cursor Monotonicity) |
-| Ch 4: Cursors | Cursor outside shard key range after split | S6 (Cursor Bounds) |
-| Ch 5: Idempotency | Replay changes terminal state | S3 (Terminal Irreversibility) |
-| Ch 6: Splits | Children missing or orphaned after split | S7 (Split Coverage) |
-| Ch 7: Run Lifecycle | Run completes with non-terminal shards | S3, S4 (Record Invariant) |
-| Ch 8: Split Operations | Parked shard reverts without fence bump | S3 sub-property (Unpark Without Fence Bump) |
-| Ch 9: Worker Session | Session lifecycle corrupts record | S4 (Record Invariant) |
+| Ch 2: Leases and Fencing | Zombie worker writes after lease expiry | S1 (Mutual Exclusion), S2 (Fence Monotonicity) |
+| Ch 3: Starting a Scan | Stale epoch bypasses fence check | S2 (Fence Monotonicity) |
+| Ch 4: Acquiring and Scanning | Cursor regresses after ownership transfer | S5 (Cursor Monotonicity) |
+| Ch 4: Acquiring and Scanning | Cursor outside shard key range after split | S6 (Cursor Bounds) |
+| Ch 5: Idempotency and Op-Log | Replay changes terminal state | S3 (Terminal Irreversibility) |
+| Ch 6: Completing the Scan | Children missing or orphaned after split | S7 (Split Coverage) |
+| Ch 7: Why Splits Exist | Run completes with non-terminal shards | S3, S4 (Record Invariant) |
+| Ch 8: Split-Replace | Parked shard reverts without fence bump | S3 sub-property (Unpark Without Fence Bump) |
+| Ch 9: Split-Residual | Session lifecycle corrupts record | S4 (Record Invariant) |
 | Run Management | Run reverts from terminal state | S8 (Run-Terminal Irreversibility) |
 | Worker Fairness | Worker starves others via rapid claiming | S9 (Claim Cooldown) |
 

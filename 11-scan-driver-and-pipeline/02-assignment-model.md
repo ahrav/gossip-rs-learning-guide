@@ -170,7 +170,7 @@ pub(crate) fn scan_fs_with_runtime(
         rules_file: config.rules_file.clone(),
         transform_filter: config.transform_filter.clone(),
     };
-    execute_assignment_with_config(&assignment, runtime, &engine, out, None, commit, cancel)
+    execute_assignment_with_config(&assignment, runtime, &engine, &GitExecutionConfig::default(), &NullEventOutput, commit, cancel)
 }
 ```
 
@@ -221,14 +221,14 @@ fn execute_assignment_with_config(
     assignment: &Assignment,
     config: ScanExecutionConfig,
     engine_config: &RuntimeEngineConfig,
-    out: &dyn EventOutput,
-    git_out: Option<&dyn GitEventOutput>,
+    git_cfg: &GitExecutionConfig,
+    out: &dyn GitEventOutput,
     commit: &dyn CommitSink,
     cancel: &CancellationToken,
 ) -> Result<AssignmentOutcome, ScanRuntimeError> {
     let mut driver = driver_for_assignment(assignment)?;
     let report = driver
-        .run(runtime_engine(engine_config)?, &config, out, git_out, commit, cancel)
+        .run(runtime_engine(engine_config)?, &config, out, commit, cancel)
         .map_err(ScanRuntimeError::Driver)?;
 
     Ok(AssignmentOutcome {
@@ -239,7 +239,7 @@ fn execute_assignment_with_config(
 }
 ```
 
-The function calls `driver_for_assignment` to obtain a driver from the factory, calls `run` with the engine and sinks, then retrieves the checkpoint hint. The driver is `&mut self` during `run` (it may accumulate internal state such as cursor position and item counts), and the checkpoint hint is queried after `run` completes. This ordering is intentional: the checkpoint represents the driver's final position after all items have been processed. A checkpoint queried during `run` would represent an intermediate position, which is useful for mid-scan checkpoints but not for the final result.
+The function calls `driver_for_assignment` to obtain a driver from the factory, calls `run` with the engine and sinks, then retrieves the checkpoint hint. The driver is `&mut self` during `run` (it may accumulate internal state such as cursor position and item counts), and the checkpoint hint is queried after `run` completes. This ordering is intentional: the checkpoint represents the driver's final position after all items have been processed. A checkpoint queried during `run` would represent an intermediate position, which is useful for mid-scan checkpoints but not for the final result. Note that git scans bypass this path entirely -- they use a dedicated `execute_git_assignment` function that receives git-specific configuration directly.
 
 ## What's Next
 

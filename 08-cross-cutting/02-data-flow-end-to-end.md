@@ -387,11 +387,11 @@ sequenceDiagram
     B2-->>W: AcquireResultView (lease, snapshot, capacity)
 
     loop For each page in shard
-        Note over W,B4: Step 3: Enumerate Items
-        W->>B4: enumerate(shard_range, cursor, page_size)
-        B4->>B4: Query source API
+        Note over W,B4: Step 3: Scan via ScanDriver
+        W->>B4: driver.run(engine, config, events, commits, cancel)
+        B4->>B4: Enumerate items within shard range
         B4->>B1: Construct ItemKeys
-        B4-->>W: Page (items, next_cursor)
+        B4-->>W: ScanReport
 
         loop For each item in page
             Note over W,B1: Step 4: Derive StableItemId

@@ -451,14 +451,14 @@ fn execute_assignment_with_config(
     assignment: &Assignment,
     config: ScanExecutionConfig,
     engine_config: &RuntimeEngineConfig,
-    out: &dyn EventOutput,
-    git_out: Option<&dyn GitEventOutput>,
+    git_cfg: &GitExecutionConfig,
+    out: &dyn GitEventOutput,
     commit: &dyn CommitSink,
     cancel: &CancellationToken,
 ) -> Result<AssignmentOutcome, ScanRuntimeError> {
     let mut driver = driver_for_assignment(assignment)?;
     let report = driver
-        .run(runtime_engine(engine_config)?, &config, out, git_out, commit, cancel)
+        .run(runtime_engine(engine_config)?, &config, out, commit, cancel)
         .map_err(ScanRuntimeError::Driver)?;
 
     Ok(AssignmentOutcome {

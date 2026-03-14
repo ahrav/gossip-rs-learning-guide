@@ -136,13 +136,12 @@ impl ScanDriver for FsScanDriver {
         engine: Arc<scanner_engine::Engine>,
         cfg: &ScanExecutionConfig,
         out: &dyn EventOutput,
-        git_out: Option<&dyn GitEventOutput>,
         commit: &dyn CommitSink,
         cancel: &gossip_scan_driver::CancellationToken,
     ) -> Result<ScanReport> {
         std::thread::scope(|scope| -> Result<ScanReport> {
             let (event_tx, event_rx) = unbounded();
-            let event_forwarder = scope.spawn(move || forward_events(out, None, event_rx));
+            let event_forwarder = scope.spawn(move || forward_events(out, event_rx));
 
             let (commit_tx, commit_rx) = unbounded();
             let commit_forwarder = scope.spawn(move || forward_commits(commit, commit_rx));
@@ -233,7 +232,6 @@ impl ScanDriver for GitScanDriver {
         engine: Arc<scanner_engine::Engine>,
         cfg: &ScanExecutionConfig,
         out: &dyn EventOutput,
-        git_out: Option<&dyn GitEventOutput>,
         _commit: &dyn CommitSink,
         cancel: &gossip_scan_driver::CancellationToken,
     ) -> Result<ScanReport> {
@@ -244,7 +242,7 @@ impl ScanDriver for GitScanDriver {
 
         std::thread::scope(|scope| -> Result<ScanReport> {
             let (event_tx, event_rx) = unbounded();
-            let event_forwarder = scope.spawn(move || forward_events(out, git_out, event_rx));
+            let event_forwarder = scope.spawn(move || forward_events(out, event_rx));
 
             let git_sink: Arc<dyn GitEventSink> =
                 Arc::new(ChannelGitEventOutput::new(event_tx.clone()));
@@ -259,7 +257,7 @@ impl ScanDriver for GitScanDriver {
                 None, &git_cfg, git_sink,
             )?;
 
-            self.debug_output = format_git_debug_output(&result.0, cfg.git.debug_level);
+            self.debug_output = format_git_debug_output(&result.0, git_cfg.debug_level);
             drop(event_tx);
             join_scoped(event_forwarder, "event forwarder thread")?;
 
@@ -280,13 +278,13 @@ the commit sink."
 
 ### Runtime Config Mapping: `build_git_scan_config`
 
-Before calling `run_git_scan`, the driver translates the runtime-level
-`ScanExecutionConfig` into the low-level `GitScanConfig` expected by the
-git scanner. The `build_git_scan_config` function (`scan_driver.rs:697-742`)
-handles this mapping:
+Before calling `run_git_scan`, the driver translates the `GitExecutionConfig`
+(passed directly to the git execution path) into the low-level `GitScanConfig`
+expected by the git scanner. The `build_git_scan_config` function
+(`scan_driver.rs:697-742`) handles this mapping:
 
 ```rust
-fn build_git_scan_config(cfg: &ScanExecutionConfig) -> Result<GitScanConfig> {
+fn build_git_scan_config(cfg: &GitExecutionConfig) -> Result<GitScanConfig> {
     const MIB: u32 = 1024 * 1024;
 
     fn mebibytes_to_u32_bytes(value_mb: u32, label: &str) -> Result<u32> {
@@ -299,21 +297,21 @@ fn build_git_scan_config(cfg: &ScanExecutionConfig) -> Result<GitScanConfig> {
     }
 
     let mut git_cfg = GitScanConfig {
-        repo_id: cfg.git.repo_id,
-        scan_mode: cfg.git.scan_mode,
-        merge_diff_mode: cfg.git.merge_diff_mode,
-        pack_exec_workers: cfg.git.pack_exec_workers
-            .unwrap_or_else(|| cfg.workers.max(1)).max(1),
-        enrich_identities: cfg.git.enrich_identities,
+        repo_id: cfg.repo_id,
+        scan_mode: cfg.scan_mode,
+        merge_diff_mode: cfg.merge_diff_mode,
+        pack_exec_workers: cfg.pack_exec_workers
+            .unwrap_or(1).max(1),
+        enrich_identities: cfg.enrich_identities,
         ..GitScanConfig::default()
     };
-    git_cfg.engine_adapter.scan_binary = cfg.git.scan_binary;
+    git_cfg.engine_adapter.scan_binary = cfg.scan_binary;
 
-    if let Some(value_mb) = cfg.git.tree_delta_cache_mb {
+    if let Some(value_mb) = cfg.tree_delta_cache_mb {
         git_cfg.tree_diff.max_tree_delta_cache_bytes =
             mebibytes_to_u32_bytes(value_mb, "x-tree-delta-cache-mb")?;
     }
-    if let Some(value_mb) = cfg.git.engine_chunk_mb {
+    if let Some(value_mb) = cfg.engine_chunk_mb {
         git_cfg.engine_adapter.chunk_bytes =
             mebibytes_to_usize_bytes(value_mb, "x-engine-chunk-mb")?;
     }
@@ -384,7 +382,6 @@ impl ScanDriver for InMemoryScanDriver {
         _engine: Arc<scanner_engine::Engine>,
         cfg: &ScanExecutionConfig,
         out: &dyn EventOutput,
-        _git_out: Option<&dyn GitEventOutput>,
         commit: &dyn CommitSink,
         cancel: &gossip_scan_driver::CancellationToken,
     ) -> Result<ScanReport> {
@@ -429,15 +426,10 @@ emitting thread (`CoreEvent<'_>`), so they cannot outlive that thread. The
 can be forwarded through a crossbeam channel:
 
 ```rust
-fn forward_events(out: &dyn EventOutput, git_out: Option<&dyn GitEventOutput>, rx: Receiver<OwnedDriverEvent>) {
+fn forward_events(out: &dyn EventOutput, rx: Receiver<OwnedDriverEvent>) {
     while let Ok(event) = rx.recv() {
         match event {
             OwnedDriverEvent::Core(core) => core.emit_into(out),
-            OwnedDriverEvent::Git(git) => {
-                if let Some(sink) = git_out {
-                    git.emit_into(sink);
-                }
-            }
         }
     }
     out.flush();
