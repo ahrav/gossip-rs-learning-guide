@@ -216,57 +216,59 @@ impl DoneLedger for InMemoryDoneLedger {
 
 ### Lattice Merge Semantics
 
-The critical behavior lives in `merge_done_ledger_records`, called when a key already exists in durable state:
+The critical behavior lives in the `StoreBackend::apply` implementation for the done-ledger. Rather than reimplementing merge logic, the in-memory backend delegates to `DoneLedgerRecord::merge()` on the contracts crate -- the same method that defines the canonical merge semantics:
 
 ```rust
-// From crates/gossip-persistence-inmemory/src/done_ledger.rs
+// From crates/gossip-persistence-inmemory/src/done_ledger.rs (inside StoreBackend::apply)
 
-fn merge_done_ledger_records(
-    existing: &DoneLedgerRecord,
-    incoming: &DoneLedgerRecord,
-) -> Result<DoneLedgerRecord, InMemoryPersistenceError> {
-    let merged_status = existing.status().merge(incoming.status());
-    let bytes_scanned = existing.bytes_scanned().max(incoming.bytes_scanned());
-    let findings_count = match merged_status {
-        DoneLedgerStatus::ScannedClean => 0,
-        DoneLedgerStatus::ScannedWithFindings => existing
-            .findings_count()
-            .max(incoming.findings_count())
-            .max(1),
-        _ => existing.findings_count().max(incoming.findings_count()),
-    };
+// Validate each record before mutation.
+for record in &payload.records {
+    record.validate()?;
 
-    let choose_incoming = incoming.status().rank() > existing.status().rank()
-        || (incoming.status().rank() == existing.status().rank()
-            && incoming.provenance().finished_at() > existing.provenance().finished_at())
-        || (incoming.status().rank() == existing.status().rank()
-            && incoming.provenance().finished_at() == existing.provenance().finished_at()
-            && incoming.provenance().started_at() > existing.provenance().started_at());
+    let prov = record.provenance();
+    if prov.started_at().as_raw() > prov.finished_at().as_raw() {
+        return Err(PersistenceInputError::ProvenanceOrdering {
+            started_at: prov.started_at().as_raw(),
+            finished_at: prov.finished_at().as_raw(),
+        }.into());
+    }
+}
 
-    let chosen = if choose_incoming { incoming } else { existing };
-    let fallback = if choose_incoming { existing } else { incoming };
+// Deduplicate within the batch using DoneLedgerRecord::merge().
+let mut by_key: HashMap<DoneLedgerKey, DoneLedgerRecord> =
+    HashMap::with_capacity(payload.records.len());
+for record in &payload.records {
+    let key = record.key();
+    match by_key.get(&key) {
+        Some(existing) => {
+            let merged = existing.merge(record)?;
+            by_key.insert(key, merged);
+        }
+        None => {
+            by_key.insert(key, record.clone());
+        }
+    }
+}
 
-    let error_code = if merged_status.is_scanned() {
-        None
-    } else {
-        chosen.error_code().cloned()
-            .or_else(|| fallback.error_code().cloned())
-    };
-
-    Ok(DoneLedgerRecord::try_new(
-        existing.key(),
-        merged_status,
-        bytes_scanned,
-        findings_count,
-        chosen.provenance(),
-        error_code,
-    )?)
+// Apply deduplicated batch to durable state.
+for (key, record) in &by_key {
+    match durable.rows.get(key) {
+        Some(existing) => {
+            let merged = existing.merge(record)?;
+            durable.rows.insert(*key, merged);
+        }
+        None => {
+            durable.rows.insert(*key, record.clone());
+        }
+    }
 }
 ```
 
-The merge algorithm enforces the `DoneLedgerStatus` join-semilattice. Status uses `merge()` -- the higher rank wins, so scanned states can never be downgraded to failed. `bytes_scanned` takes the max (monotonically increasing). `findings_count` is status-aware: forced to zero for `ScannedClean`, forced to at least one for `ScannedWithFindings`. Provenance is taken from whichever record is "freshest," using a tie-breaking cascade: higher status rank, then later `finished_at`, then later `started_at`. Error codes are cleared if the merged status is scanned -- success absorbs prior errors.
+The apply function performs three phases. First, it validates every record using `DoneLedgerRecord::validate()` and checks provenance temporal ordering -- rejecting records where `started_at` exceeds `finished_at`. Second, it deduplicates within the batch by merging records that share the same key via `DoneLedgerRecord::merge()`. Third, it applies the deduplicated batch to durable state, again using `DoneLedgerRecord::merge()` for any keys that already exist.
 
-This is the same merge contract that a PostgreSQL or SQLite backend must implement. The in-memory backend is the reference. If a production backend disagrees with `merge_done_ledger_records` on the result of any merge, one of them has a bug -- and the conformance harness (covered in the next chapter) will identify which.
+The `DoneLedgerRecord::merge()` method on the contracts crate implements the full per-field merge: status uses the lattice join (higher rank wins), `bytes_scanned` takes the max, `findings_count` is status-aware (forced to zero for `ScannedClean`, clamped to at least one for `ScannedWithFindings`), provenance is selected from the winner record using a multi-field comparison key, and error codes are cleared on scanned status or taken from the provenance winner with fallback to the loser.
+
+This delegation pattern is deliberate. The in-memory backend does not reimplement merge logic -- it calls the same `merge()` method that defines the canonical semantics. If a production backend disagrees with the contracts crate on the result of any merge, the conformance harness (covered in the next chapter) will identify which.
 
 ### Snapshot and Query Methods
 

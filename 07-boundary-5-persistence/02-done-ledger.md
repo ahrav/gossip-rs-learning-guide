@@ -401,26 +401,44 @@ Success statuses must not carry error codes. Failure and skip statuses must carr
 
 ### Record-Level Merge
 
-The record itself provides a `merge_with` method that delegates to the status lattice:
+The record itself provides a `merge` method that implements per-field merge logic using the status lattice as the foundation:
 
 From `done_ledger.rs`:
 
 ```rust
-pub fn merge_with(self, existing: &DoneLedgerRecord) -> Self {
-    debug_assert_eq!(
-        self.key, existing.key,
-        "merge_with requires matching keys"
-    );
-    let merged_status = self.status.merge(existing.status);
-    if merged_status == self.status {
-        self
-    } else {
-        existing.clone()
+pub fn merge(&self, incoming: &DoneLedgerRecord) -> Result<Self, PersistenceInputError> {
+    self.validate()?;
+    incoming.validate()?;
+
+    if self.key != incoming.key {
+        return Err(PersistenceInputError::KeyMismatch {
+            existing: Box::new(self.key),
+            incoming: Box::new(incoming.key),
+        });
     }
+
+    let merged_status = self.status.merge(incoming.status);
+    let bytes_scanned = self.bytes_scanned.max(incoming.bytes_scanned);
+    // ... per-field merge logic (see below) ...
 }
 ```
 
-The logic: compare the incoming record's status with the existing record's status. Whichever record carries the dominant status is kept wholesale -- status, bytes_scanned, findings_count, provenance, and error_code all travel together. The `debug_assert` catches key mismatches in debug builds; release builds elide the check because callers are expected to have queried by key before merging.
+Both records are validated first -- unvalidated records can break associativity because the error-code fallback mechanism may pick different losers depending on merge grouping. The method returns `Result<Self, PersistenceInputError>`, catching key mismatches and validation failures at the earliest possible point.
+
+The merge rules are applied per-field:
+
+1. **Status** -- lattice join via `DoneLedgerStatus::merge`. The higher-ranked status wins, so scanned states can never be downgraded to failed or skipped.
+
+2. **`bytes_scanned`** -- non-regressing maximum of both records.
+
+3. **`findings_count`** -- status-aware:
+   - `ScannedClean`: forced to 0.
+   - `ScannedWithFindings`: takes the max of the findings counts from whichever records have `ScannedWithFindings` status, clamped to `>= 1`. Lower-status records do not contribute findings once a `ScannedWithFindings` result exists.
+   - Otherwise: max of both values.
+
+4. **Provenance** (`run_id`, `shard_id`, `fence_epoch`, timestamps) -- the winner is chosen by comparing a multi-field key: `(status rank, finished_at, started_at, fence_epoch, run_id, shard_id, error_code)` in lexicographic order. `run_id` and `shard_id` use the same signed-integer bit-pattern ordering as the PostgreSQL backend, so both implementations resolve exact ties identically. All provenance fields travel together from the winner.
+
+5. **`error_code`** -- cleared when the merged status is a scanned state (success absorbs prior errors). Otherwise taken from the provenance winner, falling back to the loser's error code if the winner has none.
 
 ## Worker Provenance: `DoneLedgerProvenance`
 

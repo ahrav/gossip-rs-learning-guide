@@ -224,7 +224,7 @@ pub struct ObservationRecord {
     shard_id: ShardId,
     fence_epoch: FenceEpoch,
     seen_at: LogicalTime,
-    location: Option<Location>,
+    location: Option<Arc<Location>>,
 }
 ```
 
@@ -241,7 +241,7 @@ Ten fields. This is the widest record in the findings model, and deliberately so
 | `shard_id` | Which shard was being processed |
 | `fence_epoch` | Lease epoch under which the writing worker held its shard lease |
 | `seen_at` | Logical timestamp when the occurrence was observed |
-| `location` | Optional display metadata — path and URL for presentation |
+| `location` | Optional display metadata wrapped in `Arc` for cheap sharing across observations |
 
 ### Why Location Lives on Observation, Not on Occurrence
 
@@ -259,7 +259,7 @@ pub struct Location {
 
 A `Location` carries a human-readable display path and an optional deep-link URL. This is presentation context — it describes how to show the finding to a user, not the finding's identity. The display path can change when a repository renames a file; the URL can change when a hosting provider restructures its link format. Neither change affects the underlying identity of the finding or its occurrence.
 
-Attaching `Location` to the observation layer means each policy+run combination can produce its own presentation context without polluting the stable identity layers. It also means the `Location` field is `Option<Location>` — observations from batch-mode scanners that do not produce display metadata simply omit it.
+Attaching `Location` to the observation layer means each policy+run combination can produce its own presentation context without polluting the stable identity layers. The field type is `Option<Arc<Location>>` rather than `Option<Location>` — the `Arc` wrapper allows multiple observations that share the same location (common when a single scan page produces many findings in the same file) to reference the same underlying `String` fields without cloning them. This avoids allocation churn in batch-assembly loops where dozens of observations may point to the same path.
 
 ### The Constructor: `new()`
 
@@ -300,10 +300,10 @@ pub fn new(
 The `ObservationId` is derived from `(tenant_id, policy_hash, occurrence_id)` — three fixed-width 32-byte fields totaling 96 bytes of canonical input. Location defaults to `None`; the builder method `with_location()` attaches it:
 
 ```rust
-// crates/gossip-contracts/src/persistence/findings.rs:413-419
+// crates/gossip-contracts/src/persistence/findings.rs:476-482
 
 #[must_use]
-pub fn with_location(self, location: Location) -> Self {
+pub fn with_location(self, location: Arc<Location>) -> Self {
     Self {
         location: Some(location),
         ..self
@@ -311,12 +311,14 @@ pub fn with_location(self, location: Location) -> Self {
 }
 ```
 
+The method accepts `Arc<Location>` so that multiple observations sharing the same location can avoid cloning the underlying `String` fields — the caller wraps a `Location` in an `Arc` once and passes cheap `Arc::clone`s to each observation in the batch.
+
 ### Round-Trip Reconstruction: `from_persisted()`
 
 When reading an observation back from storage, the system must verify that the stored `ObservationId` still matches the canonical derivation. `from_persisted()` handles this:
 
 ```rust
-// crates/gossip-contracts/src/persistence/findings.rs:363-395
+// crates/gossip-contracts/src/persistence/findings.rs:386-418
 
 pub fn from_persisted(
     tenant_id: TenantId,
@@ -348,12 +350,12 @@ pub fn from_persisted(
         });
     }
 
-    record.location = location;
+    record.location = location.map(Arc::new);
     Ok(record)
 }
 ```
 
-The pattern: construct the record fresh (which re-derives the canonical `ObservationId`), compare to the stored value, and reject on mismatch. This catches data corruption, accidental schema migration errors, and any code path that might have written an `ObservationId` computed from incorrect inputs. The error type is specific:
+The pattern: construct the record fresh (which re-derives the canonical `ObservationId`), compare to the stored value, and reject on mismatch. This catches data corruption, accidental schema migration errors, and any code path that might have written an `ObservationId` computed from incorrect inputs. Note that `from_persisted()` accepts a plain `Option<Location>` and wraps it in `Arc` internally — the `Arc` boundary is an implementation detail of `ObservationRecord`, not a burden placed on storage-layer callers that reconstruct records from flat column data. The error type is specific:
 
 ```rust
 // crates/gossip-contracts/src/persistence/error.rs:25-28

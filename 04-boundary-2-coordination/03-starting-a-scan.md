@@ -652,11 +652,10 @@ coordination backend (e.g., network timeout, storage unavailability). The
 caller may retry after a backoff. This variant propagates from both
 `GetRunError::BackendError` (via the `From<GetRunError>` impl on the
 candidate-collection path) and `AcquireError::BackendError(InfraError)`
-(when a per-shard acquire attempt hits an infrastructure failure). The
-`InfraError` enum classifies failures as `Transient` (retryable) or
-`Corruption` (permanent), but `ClaimError` flattens this into a `message`
-string since callers at the claim level treat all backend failures as
-retry-eligible.
+(when a per-shard acquire attempt hits an infrastructure failure).
+`ClaimError::BackendError` wraps the full `InfraError` enum, preserving
+the `Transient`/`Corruption` classification so callers can decide retry
+eligibility based on the failure category.
 
 ### 3.8.4 Complexity Analysis
 

@@ -19,9 +19,9 @@ Engineers who want to understand distributed systems design through a concrete, 
 | Boundary | Name | Status | Implementation Details |
 |----------|------|--------|------------------------|
 | B1 | Identity & Hashing Spine | ✅ Fully Implemented | 11 files, 48 invariants, 9 golden vectors, zero unsafe code |
-| B2 | Coordination | ✅ Fully Implemented | 25 source files + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (14 sim modules), etcd production backend, TLA+ spec, ~35K lines |
+| B2 | Coordination | ✅ Fully Implemented | 26 source files + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (14 sim modules), etcd production backend, TLA+ spec, ~35K lines |
 | B3 | Shard Algebra | ✅ Fully Implemented | 7 source files in gossip-frontier crate, key encoding, hint metadata, builder |
-| B4 | Connector | ✅ Fully Implemented | 5 contract files, 11 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, scan-driver adapter, 8 guide chapters |
+| B4 | Connector | ✅ Fully Implemented | 9 contract files (6 source + 3 test), 10 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, scan-driver adapter, 8 guide chapters |
 | B5 | Persistence | ✅ Fully Implemented | Contract traits + in-memory test doubles + PostgreSQL backends (gossip-done-ledger-postgres, gossip-findings-postgres, gossip-pg-common), conformance harness |
 | — | Scanner Engine | ✅ Extracted | Detection engine: rule loading, content policy, scan engine, reusable scratch |
 | — | Scanner Git | ✅ Extracted | Git scanning pipeline: repo open, commit walk, tree diff, pack decode, blob spill |

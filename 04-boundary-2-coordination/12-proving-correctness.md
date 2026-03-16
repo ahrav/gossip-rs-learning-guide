@@ -568,7 +568,7 @@ The following table maps the full chain from failure scenario through invariant 
 
 ### The Fault-Injecting Introspector
 
-One remaining challenge: the `InMemoryCoordinator` stores shards in a `HashMap<(TenantId, ShardKey), ShardRecord>`, which structurally prevents S1 violations -- at most one record exists per key per tenant. The checker's S1 detection logic cannot be tested against the real backend.
+One remaining challenge: the `InMemoryCoordinator` stores shards in a two-level `AHashMap<TenantId, AHashMap<ShardKey, ShardRecord>>`, which structurally prevents S1 violations -- at most one record exists per key per tenant. The checker's S1 detection logic cannot be tested against the real backend.
 
 The `FaultInjectingIntrospector` solves this by wrapping the real backend and injecting synthetic shard records into the observation stream:
 

@@ -436,7 +436,7 @@ where
 
 ## Input Validation: PersistenceInputError
 
-The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers ten validation failure modes:
+The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers twelve validation failure modes:
 
 From `error.rs`:
 
@@ -452,10 +452,12 @@ pub enum PersistenceInputError {
     UnexpectedErrorCode { status: &'static str },
     OrphanedReference { child_type: &'static str, parent_type: &'static str },
     InconsistentTenant,
+    ProvenanceOrdering { started_at: u64, finished_at: u64 },
+    KeyMismatch { existing: Box<DoneLedgerKey>, incoming: Box<DoneLedgerKey> },
 }
 ```
 
-**Rationale:** Each variant catches a specific contract violation at the earliest possible point. `DoneLedgerRecord::try_new` rejects a `ScannedWithFindings` status with `findings_count == 0`, and vice versa for `ScannedClean` with `findings_count > 0`. `OccurrenceRecord::try_new` rejects zero-length byte spans. `ObservationRecord::from_persisted` rejects observation IDs that do not match the canonical derivation. The `DoneLedgerErrorCode` constructor restricts error codes to a small ASCII-safe alphabet (alphanumeric plus `' '`, `'_'`, `'-'`, `'.'`, `':'`, `'/'`), with a maximum size of 128 bytes -- raw connector output or user-supplied strings never enter this field.
+**Rationale:** Each variant catches a specific contract violation at the earliest possible point. `DoneLedgerRecord::try_new` rejects a `ScannedWithFindings` status with `findings_count == 0`, and vice versa for `ScannedClean` with `findings_count > 0`. `OccurrenceRecord::try_new` rejects zero-length byte spans. `ObservationRecord::from_persisted` rejects observation IDs that do not match the canonical derivation. `ProvenanceOrdering` rejects done-ledger records where `started_at` exceeds `finished_at` -- a temporal invariant checked at both construction (via `debug_assert`) and at the persistence boundary. `KeyMismatch` rejects merge operations where two records have different `DoneLedgerKey` values -- merging records for different object-versions is a logic error that must be caught before mutation. The `DoneLedgerErrorCode` constructor restricts error codes to a small ASCII-safe alphabet (alphanumeric plus `' '`, `'_'`, `'-'`, `'.'`, `':'`, `'/'`), with a maximum size of 128 bytes -- raw connector output or user-supplied strings never enter this field.
 
 ## Conformance Testing
 

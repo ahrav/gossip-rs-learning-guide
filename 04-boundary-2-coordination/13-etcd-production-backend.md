@@ -685,7 +685,7 @@ pub enum EtcdCoordinatorError {
 
 Five variants form a progression that mirrors the backend's lifecycle:
 
-1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the nine constraints was violated.
+1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the 15 constraints was violated.
 2. **`Keyspace`** — the namespace prefix could not be converted into a valid keyspace builder.
 3. **`RuntimeBuild`** — the Tokio current-thread runtime could not be created. This is a system-resource failure (fd limits, thread limits) that prevents the sync/async bridge from starting.
 4. **`Codec`** — a v1 blob failed to encode or decode during the given operation. This variant pairs the `EtcdOperation` that triggered the codec call with the `EtcdCodecError` source, preserving both "what were we doing" and "what went wrong with the bytes" in a single error.
@@ -743,7 +743,7 @@ Internal details — the `Decoder` struct, the `OwnedRunRecord` and `OwnedShardR
 
 The `gossip-coordination-etcd` crate builds the complete infrastructure for durable coordination state:
 
-- **`EtcdCoordinatorConfig`** validates endpoints, namespace prefixes, owner lease TTL, optimistic retry budget, shard count ceilings, and split-fanout limits with 14 distinct error variants (including `#[non_exhaustive]` for future extensibility). It redacts credentials in `Debug` output, normalizes whitespace from environment-variable input, and provides builder methods for auth, TLS, and shard limits.
+- **`EtcdCoordinatorConfig`** validates endpoints, namespace prefixes, owner lease TTL, optimistic retry budget, shard count ceilings, and split-fanout limits with 15 distinct error variants (including `#[non_exhaustive]` for future extensibility). It redacts credentials in `Debug` output, normalizes whitespace from environment-variable input, and provides builder methods for auth, TLS, and shard limits.
 - **`EtcdKeyspace`** maps identity tuples to deterministic ASCII keys in a hierarchical layout designed for prefix scans. Sibling separation (`runs/` vs `runs_active/`, `shards/` vs `shards_active/`) prevents cross-category scan pollution. The `_into` buffer-reuse pattern eliminates per-call allocation on hot paths.
 - **The binary codec** uses a 3-byte header (`"v1"` + `BlobKind` tag) followed by little-endian sequential fields. Three blob kinds cover run records, shard records, and owner-key bindings. Two-phase decode (parse into owned intermediates, then materialize into domain types) separates wire concerns from domain construction. Slab allocation rollback provides a strong exception guarantee: the slab is unchanged on decode failure. The `OwnerLeaseValue` codec gives the backend a compact, validated representation of shard ownership for CAS transactions.
 - **`EtcdCoordinatorError`** covers the full failure progression from config validation through runtime construction to codec failures and gRPC errors, with 9 `EtcdOperation` variants labeling every possible failure site.

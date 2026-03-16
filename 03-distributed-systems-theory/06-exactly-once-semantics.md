@@ -375,8 +375,8 @@ Exactly-once semantics is the composition of five boundaries:
 **This concludes the Distributed Systems Theory chapter.** You now understand the theoretical foundations (FLP, consistency models, leases, fencing, idempotency, failure detection, exactly-once) that underpin Gossip-rs's design. Next, you'll apply these concepts to implement Boundaries 2-5.
 
 **Further reading**:
-- [Gossip-rs Architecture Overview](../../02-architecture/architecture-overview.md)
-- [Boundary 2: Coordination](../../04-boundaries/02-coordination.md)
+- [Gossip-rs Architecture Overview](../00-prologue/03-architecture-at-a-glance.md)
+- [Boundary 2: Coordination](../04-boundary-2-coordination/01-the-coordination-problem.md)
 - [Boundary 2: Shard Algebra (Chapters 7-9)](../04-boundary-2-coordination/07-why-splits-exist.md)
-- [Boundary 4: Connector](../../04-boundaries/04-connector.md)
-- [Boundary 5: Persistence](../../04-boundaries/05-persistence.md)
+- [Boundary 4: Connector](../06-boundary-4-connector/01-connector-problem-space.md)
+- [Boundary 5: Persistence](../07-boundary-5-persistence/01-persistence-problem-space.md)
