@@ -508,12 +508,11 @@ In test builds, the connector runs a cross-check: after token-based resume, it p
 ## How Scanning is Driven
 
 The filesystem connector does not expose a page-by-page enumeration method
-to external callers. Instead, scanning is orchestrated through the
-`FilesystemScanSourceFactory` (covered in Chapter 8), which constructs a
-`FsScanDriver` that delegates to `parallel_scan_dir` from the
-scanner-scheduler crate. The walk state, cursor alignment, and split
-estimation mechanisms described above are used internally by the
-driver to traverse the filesystem within the assigned shard bounds.
+to external callers. Instead, scanning is orchestrated through
+`gossip-scanner-runtime`, which uses the `ordered_content` module to drive
+filesystem scanning. The walk state, cursor alignment, and split estimation
+mechanisms described above are used internally to traverse the filesystem
+within the assigned shard bounds.
 
 ### Capabilities
 
@@ -934,4 +933,4 @@ The FD cache widens the TOCTOU window slightly: a cached descriptor may outlive 
 
 ## Summary
 
-The `FilesystemConnector` provides a security-hardened, deadline-aware, streaming filesystem connector. `WalkState` drives a resumable sorted DFS walk that keeps memory proportional to the active directory frontier rather than the total file count. `WalkFrame` buffers and sorts one directory's entries for globally ordered key emission via `cmp_with_trailing_sep`. `ensure_root_fd` lazily opens and identity-verifies the root directory without latching failures. `should_skip_subtree` prunes entire directory subtrees that cannot overlap the requested key range, and `visited_dirs` breaks traversal cycles from bind mounts or directory hardlinks. `WalkToken` serializes DFS stack positions for O(1) cursor resume, with key-only fallback as the ground truth. `open_beneath_root` applies `O_NOFOLLOW` at every component of the `openat` traversal, opens with `O_NONBLOCK` to prevent FIFO blocking, and validates via `fstat`. Split hints are provided by an integrated `StreamingSplitEstimator` that is fed during scanning and produces byte-weighted split keys in bounded memory. `is_permanent_io_error` in `common.rs` is shared between filesystem and git connectors. Chapter 8 covers the scan-driver adapter factories that bridge this connector to the `ScanDriver` execution model.
+The `FilesystemConnector` provides a security-hardened, deadline-aware, streaming filesystem connector. `WalkState` drives a resumable sorted DFS walk that keeps memory proportional to the active directory frontier rather than the total file count. `WalkFrame` buffers and sorts one directory's entries for globally ordered key emission via `cmp_with_trailing_sep`. `ensure_root_fd` lazily opens and identity-verifies the root directory without latching failures. `should_skip_subtree` prunes entire directory subtrees that cannot overlap the requested key range, and `visited_dirs` breaks traversal cycles from bind mounts or directory hardlinks. `WalkToken` serializes DFS stack positions for O(1) cursor resume, with key-only fallback as the ground truth. `open_beneath_root` applies `O_NOFOLLOW` at every component of the `openat` traversal, opens with `O_NONBLOCK` to prevent FIFO blocking, and validates via `fstat`. Split hints are provided by an integrated `StreamingSplitEstimator` that is fed during scanning and produces byte-weighted split keys in bounded memory. `is_permanent_io_error` in `common.rs` is shared between filesystem and git connectors. Scanning is orchestrated through `gossip-scanner-runtime`, which uses the `ordered_content` module to drive filesystem scanning.

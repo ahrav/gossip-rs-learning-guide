@@ -637,7 +637,7 @@ The `wait` method takes `self` by value -- a handle can only be consumed once. T
 Not all test scenarios require full persistence semantics. The `CommitSink` trait defines a per-item lifecycle (begin, upsert findings, finish), and `NoOpCommitSink` is its zero-cost test double:
 
 ```rust
-// From crates/gossip-scan-driver/src/lib.rs
+// From crates/gossip-scanner-runtime/src/commit_sink.rs
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoOpCommitSink;

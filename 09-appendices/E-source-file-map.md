@@ -123,19 +123,23 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 
 ### Connector Contracts (Boundary 4)
 
-`crates/gossip-contracts/src/connector/` (5 files)
+`crates/gossip-contracts/src/connector/` (9 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
 | `crates/gossip-contracts/src/connector/mod.rs` | 06-01 | Module structure, public API, re-exports |
 | `crates/gossip-contracts/src/connector/api.rs` | 06-03 | Error taxonomy, capability negotiation |
 | `crates/gossip-contracts/src/connector/api_tests.rs` | 06-03 | Connector API tests |
+| `crates/gossip-contracts/src/connector/common.rs` | 06-01 | Shared connector contract utilities |
+| `crates/gossip-contracts/src/connector/common_tests.rs` | 06-01 | Common connector contract tests |
+| `crates/gossip-contracts/src/connector/git.rs` | 06-07 | Git-specific connector contract types |
+| `crates/gossip-contracts/src/connector/ordered.rs` | 06-01 | Ordered content source contract |
 | `crates/gossip-contracts/src/connector/types.rs` | 06-01, 06-02 | ScanItem, ItemRef, Budgets, ConnectorCapabilities, ErrorClass, ItemKey, TokenBytes |
 | `crates/gossip-contracts/src/connector/types_tests.rs` | 06-01, 06-02 | Connector type tests |
 
 ### Persistence Contracts (Boundary 5)
 
-`crates/gossip-contracts/src/persistence/` (10 files)
+`crates/gossip-contracts/src/persistence/` (11 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -144,6 +148,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-contracts/src/persistence/done_ledger_tests.rs` | 07-02 | DoneLedger tests |
 | `crates/gossip-contracts/src/persistence/findings.rs` | 07-03 | FindingsSink trait, CommitHandle durability contract |
 | `crates/gossip-contracts/src/persistence/findings_tests.rs` | 07-03 | FindingsSink tests |
+| `crates/gossip-contracts/src/persistence/lattice_property_tests.rs` | 07-02 | Lattice merge property-based tests |
 | `crates/gossip-contracts/src/persistence/page_commit.rs` | 07-04 | PageCommit typestate builder |
 | `crates/gossip-contracts/src/persistence/commit.rs` | 07-04 | Commit protocol types |
 | `crates/gossip-contracts/src/persistence/error.rs` | 07-01 | Persistence error types |
@@ -255,7 +260,7 @@ Shared Postgres infrastructure (connection pooling, migration runner, test suppo
 
 ### gossip-connectors
 
-`crates/gossip-connectors/src/` (11 files)
+`crates/gossip-connectors/src/` (10 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -267,17 +272,8 @@ Shared Postgres infrastructure (connection pooling, migration runner, test suppo
 | `crates/gossip-connectors/src/git_tests.rs` | 06-07 | Git connector tests |
 | `crates/gossip-connectors/src/in_memory.rs` | 06-06 | In-memory connector for testing |
 | `crates/gossip-connectors/src/in_memory_tests.rs` | 06-06 | In-memory connector tests |
-| `crates/gossip-connectors/src/scan_driver.rs` | 06-07 | ScanDriver bridge, integrates scanning pipeline with connector boundary |
 | `crates/gossip-connectors/src/split_estimator.rs` | 06-07 | Split estimator for dynamic shard splitting hints |
 | `crates/gossip-connectors/src/split_estimator_tests.rs` | 06-07 | Split estimator tests |
-
-### gossip-scan-driver
-
-`crates/gossip-scan-driver/src/` (1 file)
-
-| Source File | Primary Chapters | Topics |
-|------------|------------------|---------|
-| `crates/gossip-scan-driver/src/lib.rs` | 06-07, 08-02 | ScanDriver, ScanSourceFactory, CommitSink traits |
 
 ### scanner-engine
 
@@ -348,7 +344,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-scanner-runtime
 
-`crates/gossip-scanner-runtime/src/` (9 files)
+`crates/gossip-scanner-runtime/src/` (12 files)
 
 | Source File | Topics |
 |------------|---------|
@@ -356,10 +352,13 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | `crates/gossip-scanner-runtime/src/lib_tests.rs` | Runtime tests |
 | `crates/gossip-scanner-runtime/src/cli.rs` | CLI argument parsing and wiring |
 | `crates/gossip-scanner-runtime/src/cli_tests.rs` | CLI argument tests |
+| `crates/gossip-scanner-runtime/src/commit_model.rs` | Commit model types for result persistence |
 | `crates/gossip-scanner-runtime/src/commit_sink.rs` | CommitSink implementation |
 | `crates/gossip-scanner-runtime/src/coordination_sink.rs` | Coordination-aware result sink |
 | `crates/gossip-scanner-runtime/src/distributed.rs` | Distributed execution mode |
 | `crates/gossip-scanner-runtime/src/event_sink.rs` | Event sink for observability |
+| `crates/gossip-scanner-runtime/src/git_repo.rs` | Git repository executor for scanner runtime |
+| `crates/gossip-scanner-runtime/src/ordered_content.rs` | Ordered content source for scanner runtime |
 | `crates/gossip-scanner-runtime/src/parity.rs` | Parity checking between execution modes |
 
 ### gossip-worker
@@ -644,9 +643,6 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-connectors/src/git.rs` (Git connector)
   - `crates/gossip-connectors/src/git_tests.rs` (Git connector tests)
 
-- **06-08: Scan-Driver Adapters**
-  - `crates/gossip-connectors/src/scan_driver.rs` (ScanDriver bridge)
-
 ### Chapter 07: Boundary 5 -- Persistence (5 files)
 
 - **07-01: Persistence Problem Space**
@@ -786,11 +782,11 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 4. Read `docs/gossip-coordination/simulation-harness.md`
 
 **Scanning pipeline**:
-1. Read `crates/gossip-scan-driver/src/lib.rs` (ScanDriver, ScanSourceFactory, CommitSink)
+1. Read `crates/gossip-scanner-runtime/src/lib.rs` (runtime orchestration, CommitSink)
 2. Read `crates/scanner-engine/src/lib.rs` (detection engine)
 3. Read `crates/scanner-scheduler/src/lib.rs` (parallel scheduling)
 4. Read `crates/scanner-git/src/lib.rs` (Git scanning)
-5. Read `crates/gossip-connectors/src/scan_driver.rs` (bridge)
+5. Read `crates/gossip-connectors/src/git.rs` (connector bridge)
 
 **Worker sessions**:
 1. Read Chapter 04-09 (Worker Session)
@@ -874,9 +870,6 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 
 **`crates/gossip-connectors/src/git.rs`**:
 - Overview: Chapter 06-07 (Git Connector)
-
-**`crates/gossip-connectors/src/scan_driver.rs`**:
-- Overview: Chapter 06-08 (Scan-Driver Adapters)
 
 **`crates/gossip-contracts/src/persistence/mod.rs`**:
 - Overview: Chapter 07-01 (Persistence Problem Space)
@@ -962,7 +955,6 @@ Many chapters include "Deep Dive" boxes that reference specific source locations
 | InlineVec stack-first vector | `crates/gossip-stdx/src/inline_vec.rs` | Appendix F |
 | ByteSlab arena allocator | `crates/gossip-stdx/src/byte_slab.rs` | Appendix F |
 | TLA+ shard fencing | `specs/coordination/ShardFencing.tla` | Appendix G |
-| ScanDriver traits | `crates/gossip-scan-driver/src/lib.rs` | 06-07 |
 
 ## Test Files
 
@@ -1039,7 +1031,6 @@ See `docs/gossip-coordination/coordination-testing.md` for the test tier breakdo
    - `scanner-engine/src/` = Detection engine
    - `scanner-git/src/` = Git scanning pipeline
    - `scanner-scheduler/src/` = Scan scheduler
-   - `gossip-scan-driver/src/` = Scan driver traits
    - `gossip-scanner-runtime/src/` = Runtime orchestration
    - `gossip-coordination-etcd/src/` = Boundary 2 (etcd backend)
 2. Look up all files in that boundary in this appendix
@@ -1062,7 +1053,7 @@ This source file map provides bidirectional navigation between documentation and
 - **Concept -> Files**: Locate all code related to a topic
 - **File -> Concepts**: Understand what a file is responsible for
 
-Source files are organized across 18 crates:
+Source files are organized across 17 crates:
 
 | Crate / Boundary | Directory | File Count |
 |------------------|-----------|------------|
@@ -1073,15 +1064,14 @@ Source files are organized across 18 crates:
 | B2: Coordination (etcd) | `gossip-coordination-etcd/src/` | 8 files |
 | B3: Shard Algebra | `gossip-frontier/src/` | 7 files |
 | B4: Connector (contracts) | `gossip-contracts/src/connector/` | 9 files |
-| B4: Connector (impls) | `gossip-connectors/src/` | 11 files |
-| B5: Persistence (contracts) | `gossip-contracts/src/persistence/` | 10 files |
+| B4: Connector (impls) | `gossip-connectors/src/` | 10 files |
+| B5: Persistence (contracts) | `gossip-contracts/src/persistence/` | 11 files |
 | B5: Persistence (in-memory) | `gossip-persistence-inmemory/src/` | 7 files |
 | Shared data structures | `gossip-stdx/src/` | 23 files |
-| Scan driver traits | `gossip-scan-driver/src/` | 1 file |
 | Detection engine | `scanner-engine/src/` | 55 files (11 top + 5 subdirs) |
 | Git scanning | `scanner-git/src/` | 106 files |
 | Scan scheduler | `scanner-scheduler/src/` | 111 files (15 top + 7 subdirs) |
-| Runtime orchestration | `gossip-scanner-runtime/src/` | 9 files |
+| Runtime orchestration | `gossip-scanner-runtime/src/` | 12 files |
 | Worker binary | `gossip-worker/src/` | 1 file |
 | CLI binary | `scanner-rs-cli/src/` | 1 file |
 | Integration tests | `scanner-engine-integration-tests/` | 1 src + test dirs |

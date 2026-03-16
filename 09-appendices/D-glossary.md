@@ -54,7 +54,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **CoordinationFacade**: Super-trait that unifies `CoordinationBackend` (shard lifecycle), `RunManagement` (run creation/completion), and `ShardClaiming` (claim-next-available). Defined in `gossip-coordination/src/facade.rs`. Used as the primary trait bound when the full coordination API is required. (Chapter 04-13)
 
-**CommitSink**: Trait defined in `gossip-scan-driver` for persisting scan results from the detection pipeline. Bridges between the scanner and the coordination/persistence layer. (Chapter 07)
+**CommitSink**: Trait defined in `gossip-scanner-runtime` for persisting scan results from the detection pipeline. Bridges between the scanner and the coordination/persistence layer. (Chapter 07)
 
 **Cursor**: Opaque token representing position in enumeration. Enables resumption after crash. (Chapter 06)
 
@@ -78,7 +78,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **EnumerateError**: Connector operation failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector planning methods like `choose_split_point`. (Chapter 06)
 
-**Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the `ScanDriver::run()` protocol. (Chapter 06)
+**Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the connector and runtime orchestration layer. (Chapter 06)
 
 **ErrorClass**: Retryable vs Permanent connector error classification. Retryable errors (timeouts, rate limits) trigger backoff; Permanent errors (not found, access denied) abort the shard. (Chapter 06)
 
@@ -96,15 +96,21 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **FindingIdInputs**: Struct holding inputs for FindingId derivation: `tenant`, `item`, `rule`, `secret`. (Chapter 02-06)
 
-**FindingsSink**: Design-stage persistence interface for writing findings (not yet implemented as a standalone trait). The production interface is `CommitSink` (defined in `gossip-scan-driver`), which handles per-item commit lifecycle including findings persistence. See `CommitSink`. (Chapter 07-03)
+**FindingsSink**: Design-stage persistence interface for writing findings (not yet implemented as a standalone trait). The production interface is `CommitSink` (defined in `gossip-scanner-runtime`), which handles per-item commit lifecycle including findings persistence. See `CommitSink`. (Chapter 07-03)
 
 ## G
 
+**GitRepoExecutor**: Component in `gossip-scanner-runtime` that executes git repository scanning. Bridges the scanner-git crate to the runtime orchestration layer, handling repository clone/open, commit walking, and result collection. Defined in `gossip-scanner-runtime/src/git_repo.rs`.
+
 **Golden Vector**: Known-good input/output pair for testing. Ensures identity derivation remains stable across versions. (Chapter 02-09)
 
-**gossip-scan-driver**: Crate defining the `ScanDriver`, `ScanSourceFactory`, and `CommitSink` traits that bridge connectors to the detection engine. Lives at `crates/gossip-scan-driver/`.
+**gossip-done-ledger-postgres**: Crate implementing the Postgres-backed `DoneLedger` trait with monotonic lattice merge semantics. Production persistence backend for tracking scanned-item status. Lives at `crates/gossip-done-ledger-postgres/`.
 
-**gossip-scanner-runtime**: Crate providing runtime orchestration APIs — CLI argument wiring, coordination sink, event sink, parity checking between direct and connector execution modes. Lives at `crates/gossip-scanner-runtime/`.
+**gossip-findings-postgres**: Crate implementing the Postgres-backed `FindingsSink` trait. Production persistence backend for writing detection findings durably. Lives at `crates/gossip-findings-postgres/`.
+
+**gossip-pg-common**: Crate providing shared Postgres infrastructure (connection pooling, migration runner, test support) used by both `gossip-done-ledger-postgres` and `gossip-findings-postgres`. Lives at `crates/gossip-pg-common/`.
+
+**gossip-scanner-runtime**: Crate providing runtime orchestration APIs — CLI argument wiring, coordination sink, event sink, commit sink, git repository executor, ordered content source, parity checking between direct and connector execution modes. Lives at `crates/gossip-scanner-runtime/`.
 
 ## H
 
@@ -188,6 +194,8 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **OP_LOG_CAP**: Compile-time constant (`const OP_LOG_CAP: usize = 16`) defining the maximum number of retained op-log entries per shard. Determines the bounded idempotency window. Verified at compile time via `const _: () = assert!(ShardRecord::OP_LOG_CAP == 16);`. (Chapter 04-03)
 
+**OrderedContentSource**: Component in `gossip-scanner-runtime` that provides ordered content enumeration for the scanner pipeline. Bridges connector enumeration to the scanner's ordered processing model. Defined in `gossip-scanner-runtime/src/ordered_content.rs`.
+
 **OpId**: Idempotency token derived from fencing token. Used to detect duplicate operations. (Chapter 04-03)
 
 **Op-Log**: Log of operations with their OpIds. Enables idempotency checks. (Chapter 04-03)
@@ -240,15 +248,11 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Safety**: Property that nothing bad happens (no data corruption, no split-brain). Fencing tokens ensure safety. (Chapter 04-04, 08-03)
 
-**ScanDriver**: Trait defined in `gossip-scan-driver` for orchestrating a scan pass over a source. Implementations wire together enumeration, detection, and result persistence.
-
 **scanner-engine**: Crate containing the standalone detection engine — YARA rule compilation, regex-to-anchor optimization, content scanning, and match extraction. Lives at `crates/scanner-engine/`.
 
 **scanner-git**: Crate implementing the Git scanning pipeline — pack file decoding, commit graph walking, blob introduction analysis, diff-based history scanning. Lives at `crates/scanner-git/`.
 
 **scanner-scheduler**: Crate implementing the parallel scan scheduler — thread pool management, work scheduling, archive extraction, pipeline coordination, and simulation harnesses. Lives at `crates/scanner-scheduler/`.
-
-**ScanSourceFactory**: Trait defined in `gossip-scan-driver` for creating scan sources. Produces items to feed into the detection pipeline.
 
 **ScanItem**: Item bundling key, ref, stable ID, version, and optional metadata. Produced by connectors and consumed by the scan pipeline. (Chapter 06)
 

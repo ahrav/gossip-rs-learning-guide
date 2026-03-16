@@ -25,9 +25,8 @@ Engineers who want to understand distributed systems design through a concrete, 
 | B5 | Persistence | ✅ Fully Implemented | Contract traits + in-memory test doubles + PostgreSQL backends (gossip-done-ledger-postgres, gossip-findings-postgres, gossip-pg-common), conformance harness |
 | — | Scanner Engine | ✅ Extracted | Detection engine: rule loading, content policy, scan engine, reusable scratch |
 | — | Scanner Git | ✅ Extracted | Git scanning pipeline: repo open, commit walk, tree diff, pack decode, blob spill |
-| — | Scan Driver | ✅ Implemented | Unified scan-driver boundary for source-specific execution backends |
 | — | Scanner Scheduler | ✅ Extracted | Parallel execution runtime: executor, local FS scanning, archive expansion |
-| — | Scanner Runtime | ✅ Implemented | Unified CLI and distributed entrypoints backed by ScanDriver |
+| — | Scanner Runtime | ✅ Implemented | Unified CLI and distributed entrypoints |
 | — | Worker | ✅ Implemented | Worker binary entrypoint routing scans through scanner-runtime |
 
 ## Sequential Reading Path
@@ -45,10 +44,9 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 9. **08-cross-cutting** — Testing, failure modes, operational concerns
 10. **09-appendices** — References, glossary, TLA+ specifications
 11. **10-scanner-engine** — Detection engine: rule loading, content policy, scan pipeline
-12. **11-scan-driver-and-pipeline** — Unified execution seam for source-specific backends
-13. **12-scanner-git** — Git scanning pipeline: repo open, commit walk, tree diff, pack decode
-14. **13-scanner-scheduler** — Parallel execution runtime: executor, archive expansion
-15. **14-scanner-runtime-and-worker** — Unified CLI and distributed entrypoints
+12. **11-scanner-git** — Git scanning pipeline: repo open, commit walk, tree diff, pack decode
+13. **12-scanner-scheduler** — Parallel execution runtime: executor, archive expansion
+14. **13-scanner-runtime-and-worker** — Unified CLI and distributed entrypoints
 
 ## Topic Jump Table
 
@@ -65,10 +63,9 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 | **08-cross-cutting** | Deterministic simulation testing, chaos engineering, observability |
 | **09-appendices** | 30+ academic papers, 70+ Mermaid diagrams, TLA+ specs |
 | **10-scanner-engine** | Rule loading, content policy, scan engine, scratch memory, pool management |
-| **11-scan-driver** | ScanSourceFactory, ScanDriver, assignment-to-driver seam |
-| **12-scanner-git** | Repo open, commit walk, tree diff, pack decode, blob spill, seen store, engine adapter |
-| **13-scanner-scheduler** | Executor, local FS scanning, archive expansion, scheduling primitives |
-| **14-scanner-runtime** | CLI and distributed mode, config-to-assignment mapping, parity invariant |
+| **11-scanner-git** | Repo open, commit walk, tree diff, pack decode, blob spill, seen store, engine adapter |
+| **12-scanner-scheduler** | Executor, local FS scanning, archive expansion, scheduling primitives |
+| **13-scanner-runtime** | CLI and distributed mode, config-to-assignment mapping, parity invariant |
 
 ## What Makes This Guide Different
 
@@ -95,10 +92,10 @@ Focus on Chapter 03 (distributed theory) and Chapter 07 (testing strategy) to un
 
 ## Documentation Stats
 
-- **106 guide chapters** across 15 sections (prologue through scanner runtime)
+- **106 guide chapters** across 14 sections (prologue through scanner runtime)
 - **30+ academic papers** referenced with inline citations
 - **70+ Mermaid diagrams** showing data flow, state machines, and system interactions
-- **Direct code references** to actual implementation across 18 workspace crates including `crates/gossip-contracts/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`, `crates/gossip-connectors/`, `crates/gossip-frontier/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`, `crates/gossip-pg-common/`, `crates/scanner-engine/`, `crates/gossip-scan-driver/`, `crates/scanner-git/`, `crates/scanner-scheduler/`, `crates/gossip-scanner-runtime/`, `crates/gossip-worker/`, and `crates/scanner-rs-cli/`
+- **Direct code references** to actual implementation across 17 workspace crates including `crates/gossip-contracts/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`, `crates/gossip-connectors/`, `crates/gossip-frontier/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`, `crates/gossip-pg-common/`, `crates/scanner-engine/`, `crates/scanner-git/`, `crates/scanner-scheduler/`, `crates/gossip-scanner-runtime/`, `crates/gossip-worker/`, and `crates/scanner-rs-cli/`
 - **Safety and liveness invariants** with formal specifications across all implemented boundaries
 
 ## Navigation

@@ -4,7 +4,7 @@
 
 ---
 
-The `gossip-worker` crate is the thinnest layer in the stack. At 308 lines total (including tests), it is a binary entrypoint that does three things: initializes tracing, parses CLI arguments, and delegates to the runtime. It contains no scanning logic, no engine construction, no event formatting, no identity derivation, no coordination protocol. Every substantive operation is performed by `gossip-scanner-runtime`, which in turn delegates to `gossip-scan-driver` and the source-specific backends. The worker is the outermost shell; the runtime is the reusable library.
+The `gossip-worker` crate is the thinnest layer in the stack. At ~320 lines total (including tests), it is a binary entrypoint that does three things: initializes tracing, parses CLI arguments, and delegates to the runtime's scan dispatch modules. It contains no scanning logic, no engine construction, no event formatting, no identity derivation, no coordination protocol. Every substantive operation is performed by `gossip-scanner-runtime`, which in turn delegates to the source-family modules (`ordered_content` and `git_repo`) and the source-specific backends. The worker is the outermost shell; the runtime is the reusable library.
 
 This chapter walks through the binary from `main()` to scan completion, examining each structural choice.
 
@@ -15,14 +15,16 @@ The binary's dependency chain is intentionally narrow:
 ```mermaid
 flowchart TD
     W[gossip-worker binary] --> R[gossip-scanner-runtime]
-    R --> D[gossip-scan-driver]
-    R --> C[gossip-connectors]
-    D --> E[scanner-engine]
-    D --> S[scanner-scheduler]
+    R --> OC[ordered_content module]
+    R --> GR[git_repo module]
+    OC --> E[scanner-engine]
+    OC --> S[scanner-scheduler]
+    GR --> G[scanner-git]
+    GR --> E
     W --> T[tracing-subscriber]
 ```
 
-The worker depends on exactly two crates: `gossip-scanner-runtime` (for `scan_fs`, `scan_git`, `FsScanConfig`, `GitScanConfig`, `ExecutionMode`, `ScanBudgets`, `ScanRuntimeError`) and `tracing-subscriber` (for structured log initialization). It does not depend on the scan-driver crate directly, on the scanner engine, on any connector implementation, or on the coordination types. The runtime is the facade that encapsulates all scanning dependencies; the worker is the shell that provides the process boundary.
+The worker depends on exactly two crates: `gossip-scanner-runtime` (for `scan_fs`, `scan_git`, `FsScanConfig`, `GitScanConfig`, `ExecutionMode`, `ScanBudgets`, `ScanRuntimeError`) and `tracing-subscriber` (for structured log initialization). It does not depend on the scanner engine, on any connector implementation, or on the coordination types. The runtime is the facade that encapsulates all scanning dependencies; the worker is the shell that provides the process boundary.
 
 This narrow dependency graph means the worker binary compiles quickly, links against a small set of symbols, and has a minimal attack surface. The binary can be replaced with a different entrypoint (an HTTP service, a gRPC worker, a WASM module) without duplicating any scanning logic.
 
@@ -38,13 +40,13 @@ enum WorkerSource {
 }
 ```
 
-`WorkerSource` is a private enum with two variants. It mirrors `ConnectorKind` from the scan-driver crate but is intentionally separate -- the worker's CLI grammar does not need to expose the `InMemory` variant, which is only used in testing.
+`WorkerSource` is a private enum with two variants. It mirrors the runtime's two source families (filesystem via `ordered_content`, Git via `git_repo`) but is intentionally separate -- the worker's CLI grammar does not need to expose the `InMemory` connector tag, which is only used in testing.
 
 ```rust
 /// Worker launch configuration.
 ///
 /// The worker intentionally defaults to connector mode so both worker and CLI
-/// entrypoints exercise the same scan-driver seam.
+/// entrypoints exercise the same runtime-family boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WorkerConfig {
     source: WorkerSource,
@@ -69,7 +71,7 @@ Three fields:
 
 **`path: PathBuf`.** The scan target. Defaults to `"."` (the current working directory).
 
-**`execution_mode: ExecutionMode`.** The execution mode flag from [Chapter 1](01-runtime-architecture.md). Defaults to `ExecutionMode::Connector`. The doc comment explains the choice: "The worker intentionally defaults to connector mode so both worker and CLI entrypoints exercise the same scan-driver seam." In practice, both modes execute the same code path (as documented in Chapter 1), but defaulting to Connector mode ensures the worker is labeled correctly in telemetry and logs.
+**`execution_mode: ExecutionMode`.** The execution mode flag from [Chapter 1](01-runtime-architecture.md). Defaults to `ExecutionMode::Connector`. The doc comment explains the choice: "The worker intentionally defaults to connector mode so both worker and CLI entrypoints exercise the same runtime-family boundary." In practice, both modes execute the same code path (as documented in Chapter 1), but defaulting to Connector mode ensures the worker is labeled correctly in telemetry and logs.
 
 The defaults are chosen for the common deployment case: a worker started in a directory containing source code, scanning the filesystem. Running `gossip-worker` with no arguments scans the current directory.
 
@@ -326,7 +328,7 @@ sequenceDiagram
     participant P as parse_args
     participant W as run_worker
     participant R as gossip-scanner-runtime
-    participant D as ScanDriver
+    participant OC as ordered_content
 
     M->>T: init_tracing()
     M->>P: parse_args(env::args().skip(1))
@@ -334,10 +336,9 @@ sequenceDiagram
     M->>W: run_worker(&cfg)
     W->>R: scan_fs(FsScanConfig::new("."))
     R->>R: validate_fs_path(".")
-    R->>R: build_assignment(Filesystem, "/abs/path", ...)
-    R->>R: runtime_engine(default) -> OnceLock cached Arc
-    R->>D: driver.run(engine, cfg, NullEventOutput, NoOpCommitSink, cancel)
-    D-->>R: ScanReport { items: 47, bytes: 128000, findings: 3 }
+    R->>R: build_runtime_engine(default) -> Arc<Engine>
+    R->>OC: scan_local_filesystem(config, canonical_path, sinks, cancel)
+    OC-->>R: ScanReport { items: 47, bytes: 128000, findings: 3 }
     R-->>W: ScanReport
     W-->>M: (47, 128000, 3)
     M->>T: tracing::info("scan completed", items=47, bytes=128000, findings=3)
@@ -389,20 +390,20 @@ fn run_worker_scans_filesystem_path() {
 }
 ```
 
-The test creates a temporary directory, writes a file containing `password=alpha` (which matches the runtime's default `"runtime-secret"` rule), configures the worker to scan that directory, and asserts that at least one item was scanned (`report.0 >= 1`) and at least one finding was emitted (`report.2 >= 1`). This exercises the full pipeline: argument config, runtime dispatch, path validation, engine construction (via the `OnceLock` cache), driver execution, and report extraction.
+The test creates a temporary directory, writes a file containing `password=alpha` (which matches the runtime's default `"runtime-secret"` rule), configures the worker to scan that directory, and asserts that at least one item was scanned (`report.0 >= 1`) and at least one finding was emitted (`report.2 >= 1`). This exercises the full pipeline: argument config, runtime dispatch, path validation, engine construction, scan execution, and report extraction.
 
 ## 11. Summary -- The Delegation Chain
 
-The `gossip-worker` binary demonstrates the value of the layered architecture. At 308 lines, it contains zero scanning logic, zero engine construction, zero event formatting, zero identity derivation, and zero coordination protocol implementation. Every substantive operation lives in the library crates below it:
+The `gossip-worker` binary demonstrates the value of the layered architecture. At ~320 lines, it contains zero scanning logic, zero engine construction, zero event formatting, zero identity derivation, and zero coordination protocol implementation. Every substantive operation lives in the library crates below it:
 
 ```text
-gossip-worker (binary, 308 lines)
-  -> gossip-scanner-runtime (runtime, 1025 lines)
-    -> gossip-scan-driver (interface, 520 lines)
+gossip-worker (binary, ~320 lines)
+  -> gossip-scanner-runtime (runtime, ~1644 lines)
+    -> ordered_content / git_repo (source-family dispatch)
       -> gossip-connectors (backends)
         -> scanner-engine (detection)
 ```
 
-Each layer adds exactly one concern. The binary adds the process boundary (argument parsing, tracing, exit codes). The runtime adds configuration translation, engine caching, and sink construction. The scan-driver adds the trait boundary. The connectors add source-specific scanning. The engine adds detection. No layer duplicates another's responsibility, and no layer reaches past its immediate dependency to access a transitive dependency's internals.
+Each layer adds exactly one concern. The binary adds the process boundary (argument parsing, tracing, exit codes). The runtime adds configuration translation, engine construction, and sink wiring. The source-family modules add scan dispatch. The connectors add source-specific scanning. The engine adds detection. No layer duplicates another's responsibility, and no layer reaches past its immediate dependency to access a transitive dependency's internals.
 
-This is the "one seam" principle from [Section 11](../11-scan-driver-and-pipeline/01-the-execution-seam.md) carried through to the deployment boundary. The worker binary can be replaced, rewritten, or eliminated without changing a single line of scanning logic. The scanning logic can be upgraded (new rules, new transforms, new tuning) without changing a single line of the worker binary. The seam isolates change on both sides.
+This layered architecture isolates change on both sides of the seam. The worker binary can be replaced, rewritten, or eliminated without changing a single line of scanning logic. The scanning logic can be upgraded (new rules, new transforms, new tuning) without changing a single line of the worker binary.

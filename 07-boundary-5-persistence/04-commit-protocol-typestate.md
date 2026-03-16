@@ -526,7 +526,7 @@ The codebase contains two commit-related abstractions that operate at different 
 **`CommitSink`** is the per-item interface used by scan drivers. It exposes three methods — `begin_item`, `upsert_findings`, `finish_item` — that the driver calls for each scanned item within a page:
 
 ```rust
-// From crates/gossip-scan-driver/src/lib.rs:418-430
+// From crates/gossip-scanner-runtime/src/commit_sink.rs
 pub trait CommitSink: Send + Sync {
     fn begin_item(&self, item_key: &ItemKey, meta: &ItemMeta) -> Result<()>;
     fn upsert_findings(&self, item_key: &ItemKey, batch: &FindingsBatch) -> Result<()>;

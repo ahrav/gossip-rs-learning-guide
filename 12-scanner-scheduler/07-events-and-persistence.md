@@ -125,7 +125,7 @@ pub enum GitEvent<'a> {
 }
 ```
 
-Git events carry commit metadata and interned identity dictionaries. These are only emitted by git-aware scan paths (covered in [section 12, scanner-git](../12-scanner-git/)). The separation ensures that filesystem and connector scan paths depend only on `EventOutput`, not `GitEventOutput`.
+Git events carry commit metadata and interned identity dictionaries. These are only emitted by git-aware scan paths (covered in [section 11, scanner-git](../11-scanner-git/)). The separation ensures that filesystem and connector scan paths depend only on `EventOutput`, not `GitEventOutput`.
 
 > **Disambiguation**: The `CommitMetaEvent` shown here (from `scanner-scheduler/src/events.rs`) is the *output-facing* event type, carrying borrowed string slices (`commit_id: &[u8]`, `author: &str`, `committer: &str`) for JSON serialization. The `scanner-git` crate has a separate `CommitMetaEvent` (from `scanner-git/src/events.rs`) used for *internal coordination*, with different fields (`commit_id: u32`, `commit_oid: OidBytes`, `timestamp: u64`, `identity: Option<CommitIdentityIds>`). The scanner runtime's `CoordinationEventSink` consumes the scanner-git version, while the CLI event output path uses the scheduler version shown here.
 

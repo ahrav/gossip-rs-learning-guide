@@ -467,4 +467,4 @@ This keeps simulation infrastructure out of the default runtime build while maki
 
 This chapter concludes the scanner-scheduler section. The executor, budgets, chunking, filesystem scanning, archive handling, events, and simulation form a complete parallel execution runtime that is backend-agnostic, memory-bounded, and deterministically testable.
 
-For the detection engine that runs within each scan task, see [section 10 (scanner-engine)](../10-scanner-engine/). For git-specific scanning that uses this scheduler as its CPU engine, see [section 12 (scanner-git)](../12-scanner-git/).
+For the detection engine that runs within each scan task, see [section 10 (scanner-engine)](../10-scanner-engine/). For git-specific scanning that uses this scheduler as its CPU engine, see [section 11 (scanner-git)](../11-scanner-git/).

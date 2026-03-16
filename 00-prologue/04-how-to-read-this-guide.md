@@ -6,7 +6,7 @@ This guide supports multiple reading paths depending on your goals and backgroun
 
 ### Sequential Reading (Recommended for Learners)
 
-Read chapters in order from 00 through 14. Each chapter builds on concepts introduced in previous chapters:
+Read chapters in order from 00 through 13. Each chapter builds on concepts introduced in previous chapters:
 
 1. **00-prologue** — Understand the problem space and architecture
 2. **01-foundations** — Learn core concepts: content addressing, collision-free encoding, state machines
@@ -18,11 +18,10 @@ Read chapters in order from 00 through 14. Each chapter builds on concepts intro
 8. **07-boundary-5** — Study persistence, done ledger, and exactly-once semantics
 9. **08-cross-cutting** — Testing strategies, observability, operational concerns
 10. **09-appendices** — References, glossary, TLA+ specifications
-11. **10-scanner-engine** — Detection engine: rule loading, content policy, scan pipeline
-12. **11-scan-driver** — Unified execution seam for source-specific backends
-13. **12-scanner-git** — Git scanning pipeline: repo open, commit walk, tree diff, pack decode
-14. **13-scanner-scheduler** — Parallel execution runtime: executor, archive expansion
-15. **14-scanner-runtime** — Unified CLI and distributed entrypoints
+ 11. **10-scanner-engine** — Detection engine: rule loading, content policy, scan pipeline
+ 12. **11-scanner-git** — Git scanning pipeline: repo open, commit walk, tree diff, pack decode
+ 13. **12-scanner-scheduler** — Parallel execution runtime: executor, archive expansion
+ 14. **13-scanner-runtime** — Unified CLI and distributed entrypoints
 
 ### Jump-to-Boundary Reading (For Implementers)
 
@@ -34,10 +33,9 @@ If you're implementing a specific boundary, start with the prologue for context,
 - **Implementing connectors** → Chapter 06 (B4: Connector)
 - **Implementing persistence** → Chapter 07 (B5: Persistence)
 - **Implementing detection** → Chapter 10 (Scanner Engine)
-- **Implementing scan drivers** → Chapter 11 (Scan Driver)
-- **Implementing git scanning** → Chapter 12 (Scanner Git)
-- **Implementing scheduling** → Chapter 13 (Scanner Scheduler)
-- **Implementing runtime** → Chapter 14 (Scanner Runtime)
+- **Implementing git scanning** → Chapter 11 (Scanner Git)
+- **Implementing scheduling** → Chapter 12 (Scanner Scheduler)
+- **Implementing runtime** → Chapter 13 (Scanner Runtime)
 
 Make sure to read **Chapter 01 (Foundations)** and **Chapter 03 (Distributed Theory)** for essential background.
 

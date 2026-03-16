@@ -1011,5 +1011,4 @@ tags content identifiers with `Strong` or `Weak` confidence semantics.
 all these types.
 
 Chapter 3 shows how these types flow through connector `choose_split_point`,
-`open`, and `read_range` methods, and how the `ScanDriver` adapter layer
-bridges connectors to the scan pipeline.
+`open`, and `read_range` methods.

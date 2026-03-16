@@ -192,7 +192,7 @@ sequenceDiagram
     B4-->>W: Error (source unreachable)
 
     W->>W: Retry with backoff
-    W->>B4: scan again via ScanDriver
+    W->>B4: scan again via runtime dispatch
     B4->>S: API request
     S-xB4: Timeout again
 

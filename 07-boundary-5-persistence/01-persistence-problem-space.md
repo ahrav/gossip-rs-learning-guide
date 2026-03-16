@@ -16,9 +16,9 @@ Gossip-rs separates persistence into two trait surfaces at different abstraction
 
 ### CommitSink: The Scan-Time Interface
 
-The `CommitSink` trait lives in `gossip-scan-driver` and defines the per-item lifecycle that scan drivers call during execution. Drivers know nothing about done-ledgers, findings sinks, or commit ordering -- they call three methods in sequence for each scanned item.
+The `CommitSink` trait lives in `gossip-scanner-runtime` and defines the per-item lifecycle that scan drivers call during execution. Drivers know nothing about done-ledgers, findings sinks, or commit ordering -- they call three methods in sequence for each scanned item.
 
-From `gossip-scan-driver/src/lib.rs`:
+From `gossip-scanner-runtime/src/commit_sink.rs`:
 
 ```rust
 pub trait CommitSink: Send + Sync {
@@ -40,7 +40,7 @@ The protocol is strict: `begin_item` before any `upsert_findings`, then `finish_
 
 The `FindingRecord` at this level is deliberately compact -- five fields carrying only the data needed for downstream identity derivation:
 
-From `gossip-scan-driver/src/lib.rs`:
+From `gossip-scanner-runtime/src/commit_sink.rs`:
 
 ```rust
 pub struct FindingRecord {
@@ -54,7 +54,7 @@ pub struct FindingRecord {
 
 **Rationale:** Keeping `CommitSink` simple serves two purposes. First, scan drivers should not need to understand tenant scoping, policy hashing, or identity chain derivation -- those are runtime concerns. Second, `NoOpCommitSink` provides a zero-cost test double for CLI mode where findings flow only through the event stream:
 
-From `gossip-scan-driver/src/lib.rs`:
+From `gossip-scanner-runtime/src/commit_sink.rs`:
 
 ```rust
 pub struct NoOpCommitSink;
@@ -157,7 +157,7 @@ The key transformation: `CommitSink::FindingRecord` (five flat fields, no tenant
                            │  begin_item / upsert_findings / finish_item
                            ▼
 ┌───────────────────────────────────────────────────────────┐
-│              CommitSink  (gossip-scan-driver)              │
+│              CommitSink  (gossip-scanner-runtime)           │
 │                                                           │
 │  ┌─────────────────┐          ┌────────────────────────┐  │
 │  │ NoOpCommitSink  │          │  DurableCommitSink     │  │
@@ -513,8 +513,8 @@ Chapter 6 covers the conformance harness in depth.
 
 | Type | Module | Purpose |
 |------|--------|---------|
-| `CommitSink` | `gossip-scan-driver` | Per-item commit lifecycle for scan drivers |
-| `NoOpCommitSink` | `gossip-scan-driver` | Zero-cost CLI/test double |
+| `CommitSink` | `gossip-scanner-runtime` | Per-item commit lifecycle for scan drivers |
+| `NoOpCommitSink` | `gossip-scanner-runtime` | Zero-cost CLI/test double |
 | `DurableCommitSink` | `gossip-scanner-runtime` | Identity derivation bridge to persistence traits |
 | `DoneLedger` | `gossip-contracts/persistence` | Deduplication tracking trait |
 | `DoneLedgerKey` | `gossip-contracts/persistence` | Composite key: `(tenant, policy, ovid)` |

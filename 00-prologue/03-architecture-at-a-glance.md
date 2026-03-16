@@ -169,7 +169,7 @@ stateDiagram-v2
 - **INV-S31**: Enumeration is deterministic (same items in same order)
 - **INV-L30**: If source API is healthy, enumeration eventually completes
 
-**Status**: ✅ **Fully implemented** (5 contract files in `gossip-contracts`, 11 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, scan-driver adapter, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
+**Status**: ✅ **Fully implemented** (9 contract files in `gossip-contracts` — 5 source + 4 test, 11 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -192,7 +192,7 @@ See **[→ Chapter 06: Boundary 4](../06-boundary-4-connector/)** for complete s
 - **INV-S41**: Idempotency key appears at most once in done ledger
 - **INV-L40**: If item is processed, done ledger eventually contains entry
 
-**Status**: 🔧 **Contracts defined, reference in-memory backend implemented** (`gossip-persistence-inmemory` crate provides `InMemoryDoneLedger` and `InMemoryFindingsSink` with lattice merge semantics, idempotent writes, delayed-completion mode for simulation, and fault injection)
+**Status**: 🔧 **Contracts defined, in-memory and PostgreSQL backends implemented** (`gossip-persistence-inmemory` crate provides `InMemoryDoneLedger` and `InMemoryFindingsSink` with lattice merge semantics, idempotent writes, delayed-completion mode for simulation, and fault injection; `gossip-done-ledger-postgres` and `gossip-findings-postgres` provide PostgreSQL-backed production backends with `gossip-pg-common` shared utilities)
 
 See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete specification.
 
@@ -203,8 +203,8 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 | **B1: Identity** | ✅ Fully Implemented | 11 | 37 | Property tests, golden vectors, unit tests |
 | **B2: Coordination** | ✅ Fully Implemented | 25 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
 | **B3: Shard Algebra** | ✅ Fully Implemented | 7 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
-| **B4: Connector** | ✅ Fully Implemented | 5 contracts + 11 impl + 4 contract tests | 3 | Conformance harness, unit tests |
-| **B5: Persistence** | 🔧 Contracts + In-Memory Backend | 7 impl files | 3 | Reference in-memory backend |
+| **B4: Connector** | ✅ Fully Implemented | 9 contracts (5 src + 4 test) + 11 impl | 3 | Conformance harness, unit tests |
+| **B5: Persistence** | 🔧 Contracts + In-Memory + PostgreSQL Backends | 7 contract + 4 crates | 3 | Reference in-memory backend, PostgreSQL backends |
 
 ### Implementation Progress
 
@@ -236,10 +236,10 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 
 **Phase 3 (Complete)**: B4 Connector
 
-- Full contract surface in `gossip-contracts/src/connector/` (9 files)
+- Full contract surface in `gossip-contracts/src/connector/` (9 files — 5 source + 4 test)
 - Three concrete implementations: `InMemoryConnector`, `FilesystemConnector`, and `GitConnector` in `gossip-connectors`
+- Family-based architecture: `api.rs`, `common.rs` (shared paging vocabulary), `git.rs` (Git family contract), `ordered.rs` (ordered-content family contract), `types.rs` (validated byte wrappers)
 - Split estimator for dynamic shard splitting hints
-- Scan-driver adapter for source-specific execution backends
 - Conformance harness
 - Deterministic enumeration with split hints
 - 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, cursor advancement, circuit breakers, all connectors, and conformance
@@ -249,9 +249,8 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 - `scanner-engine`: Detection engine extracted from scanner-rs (rule loading, content policy, scan engine, scratch memory)
 - `scanner-engine-integration-tests`: Integration tests for scanner-engine cross-crate API contracts
 - `scanner-git`: Git scanning pipeline (repo open, commit walk, tree diff, pack decode, blob spill, seen store)
-- `gossip-scan-driver`: Unified scan-driver boundary for source-specific execution backends
 - `scanner-scheduler`: Parallel execution runtime (executor, local FS scanning, archive expansion)
-- `gossip-scanner-runtime`: Unified CLI and distributed entrypoints backed by ScanDriver
+- `gossip-scanner-runtime`: Unified CLI and distributed entrypoints for scanning
 - `gossip-worker`: Worker binary entrypoint
 
 **Phase 5 (In Progress)**: B5 Persistence
@@ -259,7 +258,9 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 - Architecture decision documented in `docs/boundary-5-persistence.md`
 - Contract traits define done-ledger and findings-sink interfaces
 - `gossip-persistence-inmemory` crate provides reference in-memory backends with lattice merge, idempotent writes, delayed-completion mode, and fault injection
-- Production persistent backends not yet implemented
+- `gossip-done-ledger-postgres`: PostgreSQL done-ledger backend
+- `gossip-findings-postgres`: PostgreSQL findings-sink backend
+- `gossip-pg-common`: Shared PostgreSQL utilities (migrations, types, test support)
 
 ## Mapping to Crate Structure
 
@@ -272,9 +273,11 @@ graph LR
         GCE[gossip-coordination-etcd]
         GCN[gossip-connectors]
         GPI[gossip-persistence-inmemory]
+        GDLP[gossip-done-ledger-postgres]
+        GFP[gossip-findings-postgres]
+        GPC[gossip-pg-common]
         SE[scanner-engine]
         SEIT[scanner-engine-integration-tests]
-        GSD[gossip-scan-driver]
         SG[scanner-git]
         SS[scanner-scheduler]
         GSR[gossip-scanner-runtime]
@@ -305,18 +308,22 @@ graph LR
     GCE -.->|depends on| GC
     GCN -.->|depends on| GC
     GPI -.->|depends on| GC
+    GDLP -.->|depends on| GC
+    GDLP -.->|depends on| GPC
+    GFP -.->|depends on| GC
+    GFP -.->|depends on| GPC
+    GPC -.->|depends on| GC
     SE -.->|depends on| GC
-    GSD -.->|depends on| GC
-    GSD -.->|depends on| GCN
-    GSD -.->|depends on| SE
     SEIT -.->|depends on| SE
     SEIT -.->|depends on| GC
     SG -.->|depends on| SE
     SS -.->|depends on| SE
     SS -.->|depends on| GST
     SS -.->|dev depends on| GCN
-    GSR -.->|depends on| GSD
     GSR -.->|depends on| GCN
+    GSR -.->|depends on| SE
+    GSR -.->|depends on| SS
+    GSR -.->|depends on| SG
     GW -.->|depends on| GSR
     CLI -.->|depends on| GSR
 
@@ -329,9 +336,11 @@ graph LR
     style GCE fill:#99ff99
     style GCN fill:#99ff99
     style GPI fill:#99ff99
+    style GDLP fill:#99ff99
+    style GFP fill:#99ff99
+    style GPC fill:#99ff99
     style SE fill:#99ff99
     style SEIT fill:#99ff99
-    style GSD fill:#99ff99
     style SG fill:#99ff99
     style SS fill:#99ff99
     style GSR fill:#99ff99
@@ -346,14 +355,16 @@ graph LR
 - **gossip-stdx**: Unsafe utility data structures (`RingBuffer`, `InlineVec`, `ByteSlab`) behind safe APIs, Miri-tested. Embodies the "allocate at startup" philosophy: `ByteSlab` pre-allocates a contiguous arena so that coordination hot paths avoid per-operation heap allocation entirely
 - **gossip-coordination**: In-memory coordinator, simulation harness (7 sim modules), trait definitions, session management, lease validation, split execution, event system
 - **gossip-coordination-etcd**: etcd-backed coordination backend (production coordinator)
-- **gossip-connectors**: In-memory, filesystem, and git connectors with scan-driver adapters
+- **gossip-connectors**: In-memory, filesystem, and git connectors with conformance harness
 - **gossip-persistence-inmemory**: Reference in-memory persistence backends (`InMemoryDoneLedger`, `InMemoryFindingsSink`) with lattice merge, fault injection, and delayed-completion mode for simulation
+- **gossip-done-ledger-postgres**: PostgreSQL done-ledger backend with schema migrations and idempotent writes
+- **gossip-findings-postgres**: PostgreSQL findings-sink backend with schema migrations and read API
+- **gossip-pg-common**: Shared PostgreSQL utilities (migration runner, common types, test support)
 - **scanner-engine**: Detection engine extracted from scanner-rs (rule loading, content policy, scan engine, scratch memory, pool management)
 - **scanner-engine-integration-tests**: Integration test crate for scanner-engine; validates cross-crate API contracts and import canaries
-- **gossip-scan-driver**: Unified scan-driver boundary: ScanSourceFactory, ScanDriver, assignment-to-driver seam
 - **scanner-git**: Git scanning pipeline (repo open, commit walk, tree diff, pack decode, blob spill, seen store, engine adapter, artifact acquire)
 - **scanner-scheduler**: Parallel execution runtime (executor, local FS scanning, archive expansion, scheduling primitives, event surface)
-- **gossip-scanner-runtime**: Unified CLI and distributed entrypoints backed by ScanDriver; config-to-assignment mapping
+- **gossip-scanner-runtime**: Unified CLI and distributed entrypoints for scanning; config-to-assignment mapping
 - **gossip-worker**: Worker binary entrypoint routing scans through scanner-runtime
 - **scanner-rs-cli**: CLI binary for standalone scanning
 

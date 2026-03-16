@@ -283,11 +283,11 @@ zero -- still unique per `(path, size)` but with reduced change sensitivity.
 ## How Scanning is Driven
 
 The git connector does not expose a page-by-page enumeration method to
-external callers. Instead, scanning is orchestrated through the
-`GitScanSourceFactory` (covered in Chapter 8), which constructs a
-`GitScanDriver` that delegates to `run_git_scan` from the scanner-git crate.
-The lazy indexing, shard-bound resolution, and split estimation described
-above are used internally by the driver and the connector's read methods.
+external callers. Instead, scanning is orchestrated through
+`gossip-scanner-runtime`, which uses the `git_repo` module to drive git
+scanning via the `GitRepoExecutor` trait. The lazy indexing, shard-bound
+resolution, and split estimation described above are used internally by the
+runtime and the connector's read methods.
 
 ---
 
@@ -368,5 +368,5 @@ versioning from `(path, size, mtime)` provides change detection without
 content hashing. Read-time containment re-canonicalizes
 paths before every open to catch symlink escapes created after indexing.
 
-Chapter 8 covers the scan-driver adapter factories that bridge these
-connectors to the `ScanDriver` execution model.
+Scanning is orchestrated through `gossip-scanner-runtime`, which uses the
+`git_repo` module to drive git scanning via the `GitRepoExecutor` trait.

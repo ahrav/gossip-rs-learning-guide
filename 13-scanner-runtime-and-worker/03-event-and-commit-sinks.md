@@ -196,7 +196,7 @@ pub enum StoredCoreEvent {
 }
 ```
 
-The conversion is straightforward but necessary: the `CoreEvent<'_>` borrows data from the driver's internal buffers, which are invalidated when the driver processes the next item. The owned representation preserves the event data beyond the driver's borrow scope.
+The conversion is straightforward but necessary: the `CoreEvent<'_>` borrows data from the scan loop's internal buffers, which are invalidated when the next item is processed. The owned representation preserves the event data beyond the scan's borrow scope.
 
 The critical design decision is in the error handling:
 
@@ -277,7 +277,7 @@ pub enum CommitProgressRecord {
 
 ## 4. The DurableCommitSink -- Identity Chain Derivation
 
-The `DurableCommitSink` is the persistence side of the two-channel architecture. It implements the `CommitSink` trait from the scan-driver boundary (defined in [Section 11, Chapter 4](../11-scan-driver-and-pipeline/04-commit-lifecycle.md)) and derives the full identity chain for each finding. From `commit_sink.rs`:
+The `DurableCommitSink` is the persistence side of the two-channel architecture. It implements the `CommitSink` trait (defined in the runtime's `commit_sink` module) and derives the full identity chain for each finding. From `commit_sink.rs`:
 
 ```rust
 /// Durable commit sink used by distributed mode.

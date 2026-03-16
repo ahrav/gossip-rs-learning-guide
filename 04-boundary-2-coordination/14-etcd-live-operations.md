@@ -12,29 +12,39 @@ The etcd backend must solve two problems simultaneously. First, it must implemen
 
 The backend centers on a single struct that owns all connection state and provides the `CoordinationBackend`, `RunManagement`, and `ShardClaiming` trait implementations.
 
-From `backend.rs`:
+From `backend/coordinator.rs`:
 
 ```rust
 pub struct EtcdCoordinator {
-    config: EtcdCoordinatorConfig,
-    keyspace: EtcdKeyspace,
-    runtime: tokio::runtime::Runtime,
-    client: etcd_client::Client,
-    claim_candidates_scratch: Vec<ShardId>,
+    pub(super) config: EtcdCoordinatorConfig,
+    pub(super) keyspace: EtcdKeyspace,
+    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) client: etcd_client::Client,
+    /// Reusable buffer for shard-claim candidate collection, avoiding
+    /// per-claim allocation.
+    pub(super) claim_candidates_scratch: Vec<ShardId>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) test_faults: EtcdTestFaultState,
 }
 ```
 
-Five fields. `config` carries the validated connection parameters and tuning knobs (owner lease TTL, CAS retry budget). `keyspace` generates deterministic etcd key paths from identity tuples. `client` is the gRPC handle to the etcd cluster. `claim_candidates_scratch` is a reusable buffer for the `claim_next_available` path — it avoids allocating a fresh `Vec` on every claim attempt.
+Six fields (the sixth gated behind `cfg(test)` or `feature = "test-support"`). All fields use `pub(super)` visibility — they are accessible to sibling modules in the `backend/` directory (`run_management.rs`, `shard_coordination.rs`, `test_support.rs`) but not to crate consumers. `config` carries the validated connection parameters and tuning knobs (owner lease TTL, CAS retry budget, shard count ceilings). `keyspace` generates deterministic etcd key paths from identity tuples. `client` is the gRPC handle to the etcd cluster. `claim_candidates_scratch` is a reusable buffer for the `claim_next_available` path — it avoids allocating a fresh `Vec` on every claim attempt. `test_faults` holds fault-injection state for integration tests, enabling controlled failures at specific points in CAS transaction flows.
 
 The `runtime` field is a Tokio `current_thread` runtime. The etcd client library (`etcd_client`) is async, but the `CoordinationBackend` trait is synchronous. The backend bridges this gap by owning a single-threaded Tokio runtime and calling `block_on` for every etcd RPC. This is a deliberate architectural choice: the coordination backend runs in a synchronous context (the coordination facade), and embedding async into the trait surface would infect every backend implementation with an executor dependency.
 
 The `connect()` constructor performs a two-phase fail-fast initialization: first it connects to etcd, then it issues a `status` RPC to verify the cluster is reachable and healthy. If either phase fails, the caller gets an error before any coordination operations are attempted.
 
-From `backend.rs`:
+From `backend/coordinator.rs`:
 
 ```rust
 pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorError> {
     config.validate()?;
+
+    assert!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "EtcdCoordinator::connect() must not be called from within an \
+         active Tokio runtime — use AsyncEtcdCoordinator::connect() instead"
+    );
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -48,11 +58,6 @@ pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorErr
     if let Some((user, password)) = config.auth() {
         connect_opts = connect_opts.with_user(user, password);
     }
-
-    debug_assert!(
-        tokio::runtime::Handle::try_current().is_err(),
-        "connect() must not be called from within an active Tokio runtime"
-    );
 
     let mut client = runtime
         .block_on(etcd_client::Client::connect(endpoints, Some(connect_opts)))
@@ -76,11 +81,13 @@ pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorErr
         runtime,
         client,
         claim_candidates_scratch: Vec::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        test_faults: EtcdTestFaultState::default(),
     })
 }
 ```
 
-The `debug_assert` on `Handle::try_current` catches a lethal bug at development time: calling `block_on` from inside an existing Tokio runtime deadlocks the current thread. The assertion fires only in debug builds, keeping production overhead at zero. The two-phase pattern — connect, then status — ensures that a successful `connect()` return means the cluster responded to at least one RPC. A backend that only connects but never verifies could mask a firewall rule that blocks the etcd port but allows the TCP handshake.
+The `assert` on `Handle::try_current` catches a lethal bug: calling `block_on` from inside an existing Tokio runtime deadlocks the current thread. The assertion fires in all builds — this is a hard programming error, not a performance-sensitive check. The error message directs callers to `AsyncEtcdCoordinator::connect()` as the correct alternative when an async runtime is already available. The two-phase pattern — connect, then status — ensures that a successful `connect()` return means the cluster responded to at least one RPC. A backend that only connects but never verifies could mask a firewall rule that blocks the etcd port but allows the TCP handshake.
 
 ## Internal Persistence Types
 
@@ -685,20 +692,9 @@ fn build_slab_capacity_for_initial_shard(input: &InitialShardInput<'_>) -> usize
 
 The 256-byte padding covers slab header overhead and alignment. The floor (`DEFAULT_BUILD_SLAB_FLOOR = 1024`) ensures tiny shards still get a workable slab.
 
-## Unimplemented Operations
+## Full Lifecycle Coverage
 
-The etcd backend does not yet persist all coordination operations. Eight operations panic with a descriptive message when called, signaling that the code path must not be reached until persistence logic is added:
-
-```rust
-fn fail_unimplemented<T>(&self, operation: &'static str) -> T {
-    panic!(
-        "EtcdCoordinator::{operation} is not yet persisted to etcd; \
-         this operation must be implemented before it is callable"
-    );
-}
-```
-
-The affected operations are `complete`, `park_shard`, `split_replace`, `split_residual`, `complete_run`, `fail_run`, `cancel_run`, and `unpark_shard`. These are the terminal and lifecycle transition operations — they change shard or run status in ways that require additional CAS patterns beyond what the hot path uses. `complete` must atomically update the shard status and remove the active-index entry. `split_replace` and `split_residual` must create child shard records in the same transaction that marks the parent as split. The run transition operations (`complete_run`, `fail_run`, `cancel_run`) must verify that all shards have reached a terminal state before transitioning the run. The acquire/renew/checkpoint hot path and the run creation/registration path are fully persisted; the terminal operations will follow as the coordination surface is extended.
+The etcd backend implements the complete coordination surface. Beyond the hot-path operations described above (`acquire_and_restore_into`, `renew`, `checkpoint`) and the run management operations (`create_run`, `register_shards`, `get_run`, `list_shards_into`, `collect_claim_candidates_into`), the backend also persists all lifecycle transition operations: `complete` (terminal shard status with active-index removal), `park_shard` (pauses a shard and clears its owner binding), `unpark_shard` (resumes a parked shard), `split_replace` (atomically creates child shard records and marks the parent as split), `split_residual` (narrows a shard's spec and publishes a residual), and the run transitions `complete_run`, `fail_run`, and `cancel_run`. Each uses the same CAS transaction pattern: load, validate, mutate, submit, retry on conflict. The split operations enforce per-tenant and global shard count limits via materialized counters in etcd. All operations are available in both the sync (`EtcdCoordinator`) and async (`AsyncEtcdCoordinator`) implementations.
 
 ## BackendError Propagation
 
@@ -720,7 +716,7 @@ This design preserves the trait's backend-agnostic contract: the in-memory coord
 
 ## Summary
 
-The etcd backend implements coordination operations through a disciplined pattern: load, validate, mutate, CAS-submit, retry. Three internal types (`PersistedRun`, `PersistedShard`, `PersistedOwner`) pair domain records with their etcd metadata. The three-clause owner guard (`compare_owner_present`) checks existence, value equality, and lease identity in a single transaction — closing the zombie worker gap that simpler guards leave open. The CAS retry loop uses exponential backoff with jitter to prevent thundering-herd contention. The `acquire_and_restore_into` operation creates etcd leases, writes owner keys with TTL, and assembles full shard snapshots in a single transactional flow. The `renew` and `checkpoint` operations use the same three-clause guard to ensure that only the current lease holder can extend or advance shard state. Run management operations (`create_run`, `register_shards`) use simpler CAS patterns appropriate to their contention profile. Eight terminal operations remain unimplemented as panicking stubs.
+The etcd backend implements the complete coordination surface through a disciplined pattern: load, validate, mutate, CAS-submit, retry. Three internal types (`PersistedRun`, `PersistedShard`, `PersistedOwner`) pair domain records with their etcd metadata. The three-clause owner guard (`compare_owner_present`) checks existence, value equality, and lease identity in a single transaction — closing the zombie worker gap that simpler guards leave open. The CAS retry loop uses exponential backoff with jitter to prevent thundering-herd contention. The `acquire_and_restore_into` operation creates etcd leases, writes owner keys with TTL, and assembles full shard snapshots in a single transactional flow. The `renew` and `checkpoint` operations use the same three-clause guard to ensure that only the current lease holder can extend or advance shard state. Run management operations (`create_run`, `register_shards`) use simpler CAS patterns appropriate to their contention profile. Lifecycle operations (`complete`, `park_shard`, `split_replace`, `split_residual`, `complete_run`, `fail_run`, `cancel_run`, `unpark_shard`) are fully implemented with the same transactional discipline. Both sync (`EtcdCoordinator`) and async (`AsyncEtcdCoordinator`) entrypoints share the same coordination logic.
 
 ## What's Next
 
