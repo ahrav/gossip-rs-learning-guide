@@ -107,7 +107,7 @@ CoordinationFacade
 - **S8 (RunTerminalIrreversibility)**: Terminal run states (`Done`, `Failed`, `Cancelled`) never revert
 - **S9 (CooldownViolation)**: A worker must not claim twice within `cooldown_interval` ticks
 
-**Status**: ✅ **Fully implemented** (25 source files in gossip-coordination — 17 core + 8 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
+**Status**: ✅ **Fully implemented** (26 source files in gossip-coordination — 18 core + 8 test, plus 14 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
 
 **Code**: `crates/gossip-contracts/src/coordination/` and `crates/gossip-coordination/`
 
@@ -146,22 +146,11 @@ See **[→ Chapter 04: Boundary 2, Chapters 7-9](../04-boundary-2-coordination/0
 1. **Toxic Byte Value Wrappers**: Type-safe wrappers (`ToxicBlob`, `ToxicStr`) that prevent raw byte content from leaking into safe code paths
 2. **Source Enumeration**: Plan and split work via connector capabilities (`caps`, `choose_split_point`)
 3. **Read Connectors**: Fetch content for individual items (`open`, `read_range`)
-4. **Circuit Breakers**: Detect and isolate failing APIs to prevent cascade failures (Closed → Open → HalfOpen state machine)
-6. **In-Memory Connector**: Deterministic connector for testing with configurable fault injection
-7. **Filesystem Connector**: Production connector for local directory tree enumeration
-8. **Git Connector**: Production connector for git repository scanning
-9. **Conformance Harness**: Reusable test suite that validates any connector implementation against the contract
-
-**Circuit Breaker State Machine**:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Closed
-    Closed --> Open: failure_threshold_exceeded
-    Open --> HalfOpen: timeout_expired
-    HalfOpen --> Closed: success
-    HalfOpen --> Open: failure
-```
+4. **In-Memory Connector**: `InMemoryDeterministicConnector` for testing with configurable fault injection
+5. **Circuit Breakers**: Planned pattern for detecting and isolating failing APIs to prevent cascade failures (not yet implemented in the connector layer)
+6. **Filesystem Connector**: Production connector for local directory tree enumeration
+7. **Git Connector**: Production connector for git repository scanning
+8. **Conformance Harness**: Reusable test suite that validates any connector implementation against the contract
 
 **Invariants**:
 
@@ -169,7 +158,7 @@ stateDiagram-v2
 - **INV-S31**: Enumeration is deterministic (same items in same order)
 - **INV-L30**: If source API is healthy, enumeration eventually completes
 
-**Status**: ✅ **Fully implemented** (9 contract files in `gossip-contracts` — 5 source + 4 test, 11 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
+**Status**: ✅ **Fully implemented** (9 contract files in `gossip-contracts` — 6 source + 3 test, 10 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -201,9 +190,9 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 | Boundary | Status | Files | Invariants | Tests |
 |----------|--------|-------|------------|-------|
 | **B1: Identity** | ✅ Fully Implemented | 11 | 37 | Property tests, golden vectors, unit tests |
-| **B2: Coordination** | ✅ Fully Implemented | 25 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
+| **B2: Coordination** | ✅ Fully Implemented | 26 source + 14 sim + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
 | **B3: Shard Algebra** | ✅ Fully Implemented | 7 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
-| **B4: Connector** | ✅ Fully Implemented | 9 contracts (5 src + 4 test) + 11 impl | 3 | Conformance harness, unit tests |
+| **B4: Connector** | ✅ Fully Implemented | 9 contracts (6 src + 3 test) + 10 impl | 3 | Conformance harness, unit tests |
 | **B5: Persistence** | 🔧 Contracts + In-Memory + PostgreSQL Backends | 7 contract + 4 crates | 3 | Reference in-memory backend, PostgreSQL backends |
 
 ### Implementation Progress
@@ -236,13 +225,13 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 
 **Phase 3 (Complete)**: B4 Connector
 
-- Full contract surface in `gossip-contracts/src/connector/` (9 files — 5 source + 4 test)
-- Three concrete implementations: `InMemoryConnector`, `FilesystemConnector`, and `GitConnector` in `gossip-connectors`
+- Full contract surface in `gossip-contracts/src/connector/` (9 files — 6 source + 3 test)
+- Three concrete implementations: `InMemoryDeterministicConnector`, `FilesystemConnector`, and `GitConnector` in `gossip-connectors`
 - Family-based architecture: `api.rs`, `common.rs` (shared paging vocabulary), `git.rs` (Git family contract), `ordered.rs` (ordered-content family contract), `types.rs` (validated byte wrappers)
 - Split estimator for dynamic shard splitting hints
 - Conformance harness
 - Deterministic enumeration with split hints
-- 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, cursor advancement, circuit breakers, all connectors, and conformance
+- 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, cursor advancement, planned circuit breakers, all connectors, and conformance
 
 **Phase 4 (Complete)**: Scanner Pipeline
 
@@ -353,7 +342,7 @@ graph LR
 - **gossip-contracts**: All five boundary contracts (B1-B5), coordination reference backend, simulation harness
 - **gossip-frontier**: B3 Shard Algebra implementation (key encoding, range arithmetic, shard hints, builder)
 - **gossip-stdx**: Unsafe utility data structures (`RingBuffer`, `InlineVec`, `ByteSlab`) behind safe APIs, Miri-tested. Embodies the "allocate at startup" philosophy: `ByteSlab` pre-allocates a contiguous arena so that coordination hot paths avoid per-operation heap allocation entirely
-- **gossip-coordination**: In-memory coordinator, simulation harness (7 sim modules), trait definitions, session management, lease validation, split execution, event system
+- **gossip-coordination**: In-memory coordinator, simulation harness (14 sim modules — 8 source + 6 test), trait definitions, session management, lease validation, split execution, event system
 - **gossip-coordination-etcd**: etcd-backed coordination backend (production coordinator)
 - **gossip-connectors**: In-memory, filesystem, and git connectors with conformance harness
 - **gossip-persistence-inmemory**: Reference in-memory persistence backends (`InMemoryDoneLedger`, `InMemoryFindingsSink`) with lattice merge, fault injection, and delayed-completion mode for simulation

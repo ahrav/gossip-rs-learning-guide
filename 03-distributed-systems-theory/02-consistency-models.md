@@ -34,7 +34,7 @@ This chapter explains each model, why it matters, and where it applies in Gossip
 **Cost**: Requires coordination (often consensus) to establish the total order. High latency for cross-datacenter writes.
 
 **Where Gossip-rs uses it**:
-- **Shard state machine**: The coordination backend provides linearizable operations via fencing tokens. The in-memory reference backend is the primary implementation; an etcd backend (`gossip-coordination-etcd` crate) exists with codec, keyspace, and config modules partially implemented. When Worker A reads shard state, it sees the effects of all prior writes that completed before the read began.
+- **Shard state machine**: The coordination backend provides linearizable operations via fencing tokens. The in-memory reference backend is the primary implementation; an etcd backend (`gossip-coordination-etcd` crate) is implemented with codec, keyspace, config, simulation, and behavioral conformance modules. When Worker A reads shard state, it sees the effects of all prior writes that completed before the read began.
 - **Finding identity**: Content-addressed identity is deterministic—same inputs always produce the same `FindingId`. This is effectively linearizable because there's no ambiguity: any two processes computing the identity of the same data will get identical results.
 
 ### 2. Sequential Consistency

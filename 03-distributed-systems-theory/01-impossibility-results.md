@@ -88,7 +88,7 @@ The coordinator doesn't need agreement from workers. It makes **unilateral decis
 - "Worker A, you now own shard S. Here's fencing token 42."
 - If Worker A disagrees or doesn't respond, the coordinator simply reassigns to Worker B with token 43.
 
-This is possible because workers are **stateless** with respect to shard ownership. All authoritative state lives in the coordination backend (currently in-memory, with an etcd backend implemented and PostgreSQL backends for persistence).
+This is possible because workers are **stateless** with respect to shard ownership. All authoritative state lives in the coordination backend (currently in-memory, with an etcd backend for coordination and PostgreSQL backends for the done ledger and findings sink).
 
 ### 2. Leases Replace Consensus
 

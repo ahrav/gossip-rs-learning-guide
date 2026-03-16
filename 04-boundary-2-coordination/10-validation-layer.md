@@ -509,12 +509,12 @@ Each coordination operation has a dedicated error type:
 
 | Operation          | Error Type        | Unique traits                                    |
 |--------------------|-------------------|--------------------------------------------------|
-| `acquire`          | `AcquireError`    | No `From<CoordError>` -- has `AlreadyLeased`, `BackendError` |
-| `renew`            | `RenewError`      | Common precondition variants + `BackendError`    |
-| `checkpoint`       | `CheckpointError` | Widest surface (tied with Complete) + `BackendError` |
-| `complete`         | `CompleteError`   | Same as Checkpoint (no `BackendError`)           |
-| `park`             | `ParkError`       | No cursor variants                               |
-| `split`            | `SplitError`      | Has `SplitInvalid`, no cursor variants           |
+| `acquire`          | `AcquireError`    | No `From<CoordError>` -- has `AlreadyLeased`, `BackendError(InfraError)` |
+| `renew`            | `RenewError`      | Common precondition variants + `BackendError(InfraError)` |
+| `checkpoint`       | `CheckpointError` | Widest surface (tied with Complete) + `BackendError(InfraError)` |
+| `complete`         | `CompleteError`   | Same as Checkpoint + `BackendError(InfraError)`  |
+| `park`             | `ParkError`       | No cursor variants + `BackendError(InfraError)`  |
+| `split`            | `SplitError`      | Has `SplitInvalid`, no cursor variants + `BackendError(InfraError)` |
 
 ### The Variant Routing Matrix
 
@@ -547,14 +547,22 @@ error is recoverable: the caller may retry after freeing slab space.
 `ParkError` does not have this variant because parking does not update cursor
 or lineage slab storage.
 
-Additionally, seven error types carry a `BackendError { message: String }`
-variant for transient coordination infrastructure errors (e.g., network
-timeout, storage unavailability). The affected types are: `AcquireError`,
-`RenewError`, `CheckpointError`, `CreateRunError`, `RegisterShardsError`,
-`GetRunError`, and `ClaimError`. `CompleteError`, `ParkError`, and
-`SplitError` do not yet carry this variant. `BackendError` is not routed
-through `CoordError` -- it is defined directly on each error type. The caller
-may retry after a backoff.
+Additionally, every operation-specific error type carries a
+`BackendError(InfraError)` variant for coordination infrastructure errors.
+`InfraError` is a structured enum with two variants:
+
+- **`Transient { operation, message }`** -- retryable infrastructure failures
+  (network timeouts, gRPC errors, CAS retry budget exhaustion).
+- **`Corruption { operation, message }`** -- permanent data inconsistencies
+  (codec decode failures, missing records, invariant violations in stored state).
+
+The `operation` field identifies the failing step as a human-readable label
+(e.g., `"acquire.load_shard"`, `"renew.txn"`). The affected error types are:
+`AcquireError`, `RenewError`, `CheckpointError`, `CompleteError`, `ParkError`,
+`SplitError`, `CreateRunError`, `RegisterShardsError`, `GetRunError`, and
+`ClaimError`. `BackendError` is not routed through `CoordError` -- it is
+defined directly on each error type. Callers can use `InfraError::is_transient()`
+to decide whether to retry.
 
 The five common variants (`ShardNotFound` through `ShardTerminal`) appear
 in every column. The remaining seven are operation-specific: `OpIdConflict`

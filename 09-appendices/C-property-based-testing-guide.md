@@ -510,7 +510,7 @@ fn custom_strategy() -> impl Strategy<Value = MyType> {
    - Field-order independence: order matters for arrays, not for sets
    - Determinism: same struct → same bytes
 
-3. **Shard algebra** (`crates/gossip-contracts/src/shard/*.rs`):
+3. **Shard algebra** (`crates/gossip-frontier/src/*.rs`):
    - Range splitting: no overlaps, no gaps
    - Key encoding: monotonicity preserved
    - Coverage: every item falls in exactly one shard

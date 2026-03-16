@@ -45,27 +45,27 @@ crates/gossip-coordination/src/in_memory.rs
 ```rust
 pub struct InMemoryCoordinator {
     // Two-level shard map: tenant -> (shard_key -> record).
-    shards: AHashMap<TenantId, AHashMap<ShardKey, ShardRecord>>,
+    pub(crate) shards: AHashMap<TenantId, AHashMap<ShardKey, ShardRecord>>,
     // Global shard count, maintained inline on insert/remove.
-    total_shard_count: usize,
+    pub(crate) total_shard_count: usize,
     // Run records keyed by (tenant, run).
-    runs: AHashMap<(TenantId, RunId), RunRecord>,
+    pub(crate) runs: AHashMap<(TenantId, RunId), RunRecord>,
     // Secondary index: run -> shard IDs (root + split children).
-    run_shards: AHashMap<(TenantId, RunId), HashSet<ShardId, ahash::RandomState>>,
+    pub(crate) run_shards: AHashMap<(TenantId, RunId), HashSet<ShardId, ahash::RandomState>>,
     // Duration applied to every new lease.
-    default_lease_duration: u64,
+    pub(crate) default_lease_duration: u64,
     // Per-tenant shard cap.
-    max_shards_per_tenant: usize,
+    pub(crate) max_shards_per_tenant: usize,
     // Global shard cap.
-    max_total_shards: usize,
+    pub(crate) max_total_shards: usize,
     // Per-worker claim cooldown: worker -> last successful claim time.
-    claim_cooldowns: AHashMap<WorkerId, LogicalTime>,
+    pub(crate) claim_cooldowns: AHashMap<WorkerId, LogicalTime>,
     // Minimum time between successive claims by the same worker.
-    claim_cooldown_interval: u64,
+    pub(crate) claim_cooldown_interval: u64,
     // Arena allocator for pooled ShardRecord fields (spec + cursor).
-    slab: ByteSlab,
+    pub(crate) slab: ByteSlab,
     // Reusable shard-id candidate buffer for claim hot path.
-    claim_candidates_scratch: Vec<ShardId>,
+    pub(crate) claim_candidates_scratch: Vec<ShardId>,
 }
 ```
 
@@ -597,9 +597,9 @@ and `unpark_shard`.
 
 The `RenewError` type is correspondingly narrow: it carries the
 five common precondition variants (`ShardNotFound`, `TenantMismatch`,
-`StaleFence`, `LeaseExpired`, `ShardTerminal`) plus `BackendError` for
-transient infrastructure failures. No `OpIdConflict`, no
-cursor variants, no split variants.
+`StaleFence`, `LeaseExpired`, `ShardTerminal`) plus `BackendError(InfraError)`
+for infrastructure failures (`InfraError` classifies errors as `Transient` or
+`Corruption`). No `OpIdConflict`, no cursor variants, no split variants.
 
 ---
 

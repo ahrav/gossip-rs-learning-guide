@@ -110,7 +110,7 @@ coordinator.checkpoint(
 Every public API in the coordination layer requires `TenantId` as the first parameter:
 
 ```rust
-// From crates/gossip-coordination/src/facade.rs:457
+// From crates/gossip-coordination/src/facade.rs
 pub trait CoordinationFacade: CoordinationBackend + RunManagement + ShardClaiming {}
 
 // Blanket impl: the three component traits compose automatically.
@@ -134,7 +134,7 @@ fn acquire_and_restore_into<'a>(
 
 fn checkpoint(
     &mut self, now: LogicalTime, tenant: TenantId, lease: &Lease,
-    cursor: CursorUpdate, op_id: OpId,
+    new_cursor: &CursorUpdate<'_>, op_id: OpId,
 ) -> Result<IdempotentOutcome<()>, CheckpointError>;
 ```
 
@@ -274,8 +274,8 @@ Every public API across all boundaries requires `TenantId` as a parameter. Omitt
 **Boundary 2 (Coordination)**:
 ```rust
 coordinator.acquire_and_restore_into(now, tenant, key, worker, &mut scratch)?;
-coordinator.checkpoint(now, tenant, &lease, new_cursor, op_id)?;
-coordinator.complete(now, tenant, &lease, final_cursor, op_id)?;
+coordinator.checkpoint(now, tenant, &lease, &new_cursor, op_id)?;
+coordinator.complete(now, tenant, &lease, &final_cursor, op_id)?;
 ```
 
 **Boundary 4 (Connector)**:

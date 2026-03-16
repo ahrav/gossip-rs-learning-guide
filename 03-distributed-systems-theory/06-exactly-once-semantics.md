@@ -236,7 +236,7 @@ The status forms a **join-semilattice** — once an object reaches a scanned sta
 
 This lattice provides three critical properties: **idempotence** (merging a value with itself is a no-op), **commutativity** (`a.merge(b) == b.merge(a)`), and **monotonicity** (scanned status can never be downgraded by a concurrent failure write).
 
-**Typestate protocol** ensures commit ordering via `PageCommit<S>`, which encodes three mandatory durability stages as type-level states. A page commit is scoped to `PageCommitScope(TenantId, RunId, ShardId, FenceEpoch, committed_items, checkpoint_cursor)`:
+**Typestate protocol** ensures commit ordering via `PageCommit<S>`, which encodes three mandatory durability stages as type-level states. A page commit is scoped to `CommitScope(TenantId, PolicyHash, RunId, ShardId, FenceEpoch, committed_units, checkpoint_boundary)`:
 
 ```rust
 // From gossip-contracts persistence::page_commit — compile-time enforcement

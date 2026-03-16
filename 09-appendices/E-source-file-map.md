@@ -39,7 +39,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 ### gossip-coordination (Boundary 2 — runtime)
 
-`crates/gossip-coordination/src/` (25 files)
+`crates/gossip-coordination/src/` (26 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -63,6 +63,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/in_memory_tests.rs` | 04-11, 04-12 | In-memory backend tests |
 | `crates/gossip-coordination/src/in_memory_filter_tests.rs` | 04-12 | In-memory filter tests |
 | `crates/gossip-coordination/src/in_memory_run_tests.rs` | 04-12 | In-memory run tests |
+| `crates/gossip-coordination/src/conformance.rs` | 04-12 | Conformance test infrastructure and reusable harness |
 | `crates/gossip-coordination/src/conformance_tests.rs` | 04-12 | Conformance test suite |
 | `crates/gossip-coordination/src/scenario_tests.rs` | 04-12 | Scenario-based integration tests |
 | `crates/gossip-coordination/src/test_fixtures.rs` | 04-12 | Shared test fixtures and helpers |
@@ -92,7 +93,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 ### gossip-coordination-etcd (Boundary 2 — etcd backend)
 
-`crates/gossip-coordination-etcd/src/` (8 files)
+`crates/gossip-coordination-etcd/src/` (16 files: 12 top-level + 4 in `backend/`)
 
 etcd-backed coordination backend implementing the full coordination trait surface (`CoordinationBackend`, `RunManagement`, `ShardClaiming`) against a real etcd cluster. Production-path alternative to the in-memory coordinator.
 
@@ -100,11 +101,19 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 |------------|------------------|---------|
 | `crates/gossip-coordination-etcd/src/lib.rs` | 04-08 | Crate root, module declarations, `EtcdCoordinator` re-export |
 | `crates/gossip-coordination-etcd/src/backend.rs` | 04-08, 04-11 | `EtcdCoordinator`: owns etcd client, health-check, trait method dispatch |
+| `crates/gossip-coordination-etcd/src/backend/coordinator.rs` | 04-08 | Core coordinator implementation |
+| `crates/gossip-coordination-etcd/src/backend/run_management.rs` | 04-08 | Run lifecycle operations against etcd |
+| `crates/gossip-coordination-etcd/src/backend/shard_coordination.rs` | 04-08 | Shard lifecycle operations against etcd |
+| `crates/gossip-coordination-etcd/src/backend/test_support.rs` | 04-12 | Test support utilities for the etcd backend |
+| `crates/gossip-coordination-etcd/src/behavioral_conformance.rs` | 04-12 | Behavioral conformance tests for the etcd backend |
 | `crates/gossip-coordination-etcd/src/config.rs` | 04-08 | Validated connection parameters (endpoints, namespace prefix) |
 | `crates/gossip-coordination-etcd/src/keyspace.rs` | 04-08 | Deterministic ASCII etcd path construction for runs, shards, leases, indexes |
 | `crates/gossip-coordination-etcd/src/codec.rs` | 04-08 | Binary encoding/decoding of coordination records to etcd values |
 | `crates/gossip-coordination-etcd/src/codec_tests.rs` | 04-08 | Codec roundtrip and compatibility tests |
 | `crates/gossip-coordination-etcd/src/error.rs` | 04-18 | etcd-specific error types and mapping to coordination errors |
+| `crates/gossip-coordination-etcd/src/sim_coordinator.rs` | 08-05 | Simulation coordinator for deterministic testing of the etcd backend |
+| `crates/gossip-coordination-etcd/src/sim_etcd_kv.rs` | 08-05 | Simulated etcd key-value store for deterministic testing |
+| `crates/gossip-coordination-etcd/src/test_support.rs` | 04-12 | Shared test support utilities |
 | `crates/gossip-coordination-etcd/src/tests.rs` | 04-12 | Integration tests for the etcd backend |
 
 ### gossip-frontier (Boundary 3: Shard Algebra)
@@ -139,7 +148,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 
 ### Persistence Contracts (Boundary 5)
 
-`crates/gossip-contracts/src/persistence/` (11 files)
+`crates/gossip-contracts/src/persistence/` (12 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -154,6 +163,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-contracts/src/persistence/error.rs` | 07-01 | Persistence error types |
 | `crates/gossip-contracts/src/persistence/conformance.rs` | 07-05 | Persistence conformance test suite |
 | `crates/gossip-contracts/src/persistence/ovid.rs` | 07-01 | Observation/version identity helpers |
+| `crates/gossip-contracts/src/persistence/write_context.rs` | 07-01 | Shared write-side routing and fencing metadata |
 
 ### gossip-persistence-inmemory (Boundary 5 — in-memory backend)
 
@@ -344,7 +354,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-scanner-runtime
 
-`crates/gossip-scanner-runtime/src/` (12 files)
+`crates/gossip-scanner-runtime/src/` (15 files)
 
 | Source File | Topics |
 |------------|---------|
@@ -352,6 +362,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | `crates/gossip-scanner-runtime/src/lib_tests.rs` | Runtime tests |
 | `crates/gossip-scanner-runtime/src/cli.rs` | CLI argument parsing and wiring |
 | `crates/gossip-scanner-runtime/src/cli_tests.rs` | CLI argument tests |
+| `crates/gossip-scanner-runtime/src/checkpoint_aggregator.rs` | Receipt-driven committed-prefix checkpoint aggregation |
 | `crates/gossip-scanner-runtime/src/commit_model.rs` | Commit model types for result persistence |
 | `crates/gossip-scanner-runtime/src/commit_sink.rs` | CommitSink implementation |
 | `crates/gossip-scanner-runtime/src/coordination_sink.rs` | Coordination-aware result sink |
@@ -360,6 +371,8 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | `crates/gossip-scanner-runtime/src/git_repo.rs` | Git repository executor for scanner runtime |
 | `crates/gossip-scanner-runtime/src/ordered_content.rs` | Ordered content source for scanner runtime |
 | `crates/gossip-scanner-runtime/src/parity.rs` | Parity checking between execution modes |
+| `crates/gossip-scanner-runtime/src/result_committer.rs` | Per-item durable result committer (findings → done-ledger ordering) |
+| `crates/gossip-scanner-runtime/src/result_translation.rs` | Translation between scan results and persistence types |
 
 ### gossip-worker
 
@@ -629,7 +642,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `diagrams/09-circuit-breaker.md` (circuit breaker diagram)
 
 - **06-05: In-Memory Deterministic Connector**
-  - `crates/gossip-connectors/src/in_memory.rs` (InMemoryConnector for testing)
+  - `crates/gossip-connectors/src/in_memory.rs` (InMemoryDeterministicConnector for testing)
   - `crates/gossip-connectors/src/in_memory_tests.rs` (In-memory connector tests)
 
 - **06-06: Filesystem Connector**

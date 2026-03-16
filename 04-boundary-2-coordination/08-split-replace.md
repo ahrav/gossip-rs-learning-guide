@@ -8,6 +8,14 @@
 
 A split-replace operation retires a parent shard and replaces it with two or more children. The plan is expressed as a `SplitReplacePlan<'a>`, which carries the specification for each child using borrowed views to avoid heap allocation on the split hot path.
 
+> **Crate boundary:** `SplitReplaceChild`, `SplitReplacePlan`, and
+> `SplitResidualPlan` are defined in the `gossip-contracts` crate
+> (`gossip_contracts::coordination::split`), not in `gossip-coordination`.
+> The coordination crate imports them for execution. This placement reflects
+> the design principle that split *planning* is part of the shared contract
+> layer, while split *execution* (ID derivation, payload hashing, record
+> mutation) lives in `gossip-coordination::split_execution`.
+
 ### SplitReplaceChild
 
 Each child in the plan carries two things: what range it covers and where scanning should begin.

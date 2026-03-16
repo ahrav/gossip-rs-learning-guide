@@ -289,11 +289,11 @@ The dependency direction is strict and uni-directional:
                     ^
                     | depends on
                     |
-  Tier 1: gossip-connectors (FilesystemConnector, GitConnector, InMemoryConnector)
+  Tier 1: gossip-connectors (FilesystemConnector, GitConnector, InMemoryDeterministicConnector)
   +------------------------------------------+
-  | impl OrderedContentSource for Filesystem  |
-  | impl GitRepoExecutor for GitConnector     |
-  | impl OrderedContentSource for InMemory    |
+  | FilesystemConnector  (ordered-content)    |
+  | GitConnector         (git execution)      |
+  | InMemoryDeterministicConnector (ordered)  |
   +------------------------------------------+
 ```
 

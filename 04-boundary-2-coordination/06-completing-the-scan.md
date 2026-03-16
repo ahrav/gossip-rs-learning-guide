@@ -673,10 +673,11 @@ The coordination protocol uses per-operation error types rather than a single me
 | `CheckpointMissingKey` | yes            | --          |
 | `ResourceExhausted`    | yes            | --          |
 | `SplitInvalid`         | --             | --          |
+| `BackendError(InfraError)` | yes        | yes         |
 
 `CompleteError` includes a `ResourceExhausted(SlabFull)` variant with a `From<SlabFull>` impl. This fires when the byte slab cannot satisfy an allocation request during cursor update (e.g., the new cursor key or token is larger than the previous one and needs a fresh slab slot). The error is recoverable -- the caller may retry after freeing slab space. `CheckpointError` has the same variant for the same reason.
 
-`ParkError` excludes all cursor variants because parking does not advance the cursor. `CompleteError` includes them because the final cursor must satisfy monotonicity and bounds constraints. Neither includes `SplitInvalid` because neither is a split operation.
+`ParkError` excludes all cursor variants because parking does not advance the cursor. `CompleteError` includes them because the final cursor must satisfy monotonicity and bounds constraints. Neither includes `SplitInvalid` because neither is a split operation. Both carry a `BackendError(InfraError)` variant for infrastructure failures (e.g., network timeout, storage corruption); the `InfraError` enum classifies errors as `Transient` (retryable) or `Corruption` (permanent).
 
 This precision means callers can match exhaustively on the error variants that are actually possible. A `ParkError` handler never needs to handle `CursorRegression` -- the type system guarantees it cannot occur.
 

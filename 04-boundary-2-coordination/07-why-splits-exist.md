@@ -455,7 +455,10 @@ Determinism is essential for idempotent replay: when a split is replayed, the co
 
 ## 7. Split Constants and Their Relationship
 
-Two constants from `limits.rs` bound the fan-out of split operations:
+Two constants from `gossip-contracts/src/coordination/limits.rs` bound the
+fan-out of split operations. These live in the `gossip-contracts` crate (not
+the `gossip-coordination` crate) because they are part of the shared contract
+that both planning and execution code depend on:
 
 ```rust
 /// Maximum number of children in a single SplitReplace operation.

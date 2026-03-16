@@ -303,9 +303,9 @@ for attempt in 0..self.config.optimistic_txn_retries() {
         Ok(Some(shard)) => shard,
         Ok(None) => return Err(AcquireError::ShardNotFound { shard: key }),
         Err(err) => {
-            return Err(AcquireError::BackendError {
-                message: format!("acquire.load_shard: {err}"),
-            });
+            return Err(AcquireError::BackendError(
+                InfraError::transient("acquire.load_shard", &err),
+            ));
         }
     };
 
@@ -340,9 +340,9 @@ After preconditions pass, the operation creates a fresh etcd lease and builds th
     let grant = match self.etcd_lease_grant(self.config.owner_lease_ttl_secs()) {
         Ok(g) => g,
         Err(err) => {
-            return Err(AcquireError::BackendError {
-                message: format!("acquire.lease_grant: {err}"),
-            });
+            return Err(AcquireError::BackendError(
+                InfraError::transient("acquire.lease_grant", &err),
+            ));
         }
     };
     let new_lease_id = grant.id();
@@ -434,9 +434,9 @@ fn renew(
             Ok(Some(shard)) => shard,
             Ok(None) => return Err(RenewError::ShardNotFound { shard: key }),
             Err(err) => {
-                return Err(RenewError::BackendError {
-                    message: format!("renew.load_shard: {err}"),
-                });
+                return Err(RenewError::BackendError(
+                    InfraError::transient("renew.load_shard", &err),
+                ));
             }
         };
 
@@ -698,21 +698,21 @@ The etcd backend implements the complete coordination surface. Beyond the hot-pa
 
 ## BackendError Propagation
 
-Every domain error type in the coordination crate (`AcquireError`, `RenewError`, `CheckpointError`, `CreateRunError`, `RegisterShardsError`, `GetRunError`, `ClaimError`) carries a `BackendError { message: String }` variant. The etcd backend uses this variant to surface infrastructure failures without exposing `EtcdCoordinatorError` through the trait boundary.
+Every domain error type in the coordination crate (`AcquireError`, `RenewError`, `CheckpointError`, `CompleteError`, `ParkError`, `SplitError`, `CreateRunError`, `RegisterShardsError`, `GetRunError`, `ClaimError`) carries a `BackendError(InfraError)` variant. `InfraError` is a structured enum with two variants -- `Transient { operation, message }` for retryable failures and `Corruption { operation, message }` for permanent data inconsistencies. The etcd backend uses this variant to surface infrastructure failures without exposing `EtcdCoordinatorError` through the trait boundary.
 
 The pattern is consistent across all operations:
 
 ```rust
 Err(err) => {
-    return Err(AcquireError::BackendError {
-        message: format!("acquire.load_shard: {err}"),
-    });
+    return Err(AcquireError::BackendError(
+        InfraError::transient("acquire.load_shard", &err),
+    ));
 }
 ```
 
-The message prefix (`acquire.load_shard`, `renew.txn`, `checkpoint.encode_shard`) identifies which operation and which internal step failed. The `EtcdCoordinatorError`'s `Display` implementation includes the etcd operation tag and the underlying gRPC error, so the formatted message carries enough context for diagnosis without requiring callers to depend on the etcd-specific error type.
+The `InfraError::transient()` constructor takes an operation label and a display-able error. The `operation` field (e.g., `"acquire.load_shard"`, `"renew.txn"`, `"checkpoint.encode_shard"`) identifies which operation and which internal step failed. The `InfraError`'s `Display` implementation formats as `[transient] {operation}: {message}` or `[corruption] {operation}: {message}`, so the output carries enough context for diagnosis without requiring callers to depend on the etcd-specific error type.
 
-This design preserves the trait's backend-agnostic contract: the in-memory coordinator never produces `BackendError` (it has no infrastructure to fail), while the etcd coordinator translates every infrastructure failure into the same variant. Callers can treat `BackendError` as a transient failure eligible for retry after backoff, regardless of which backend is in use.
+This design preserves the trait's backend-agnostic contract: the in-memory coordinator never produces `BackendError` (it has no infrastructure to fail), while the etcd coordinator translates every infrastructure failure into `BackendError(InfraError)`. Callers can use `InfraError::is_transient()` to decide whether to retry or escalate, regardless of which backend is in use.
 
 ## Summary
 

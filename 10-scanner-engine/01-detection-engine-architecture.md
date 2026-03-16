@@ -153,6 +153,14 @@ pub(super) struct RuleCompiled {
 pub(super) struct RuleCold {
     /// Human-readable rule name used in finding reports.
     pub(super) name: &'static str,
+    /// BLAKE3 derive-key fingerprint of the rule name.
+    ///
+    /// Precomputed at engine construction via BLAKE3 derive-key mode over
+    /// the `"gossip/rule/v1"` domain constant and `name`. Stored as raw
+    /// bytes because `scanner-engine` does not depend on `gossip-contracts`
+    /// (which owns `RuleFingerprint`). The `ScanEngine` trait adapter in
+    /// `scanner-scheduler` wraps these bytes into `RuleFingerprint`.
+    pub(super) fingerprint: [u8; 32],
     /// Effective minimum confidence threshold for this rule.
     pub(super) min_confidence: i8,
 }
@@ -162,12 +170,12 @@ Compile-time size guards enforce this discipline:
 
 ```rust
 const _: () = assert!(std::mem::size_of::<RuleCompiled>() <= 88);
-const _: () = assert!(std::mem::size_of::<RuleCold>() <= 24);
+const _: () = assert!(std::mem::size_of::<RuleCold>() <= 56);
 ```
 
 **`RuleCompiled`** is touched for every candidate window. It contains the regex, the must-contain needle, and `u32` indices into gate pools. Gate objects (keyword tables, entropy parameters, two-phase configs) live in separate `Vec`s on `Engine` and are resolved through pool accessors only when the gate is present (`!= NO_GATE`). This indirection keeps `RuleCompiled` at 88 bytes — small enough to fit within a cache-line pair (128 bytes).
 
-**`RuleCold`** is touched only when a finding survives all gates and is about to be emitted. Storing the rule name (a pointer + length) here instead of in `RuleCompiled` avoids polluting the hot array with data that is read once per emitted finding, not once per candidate window.
+**`RuleCold`** is touched only when a finding survives all gates and is about to be emitted. It carries the rule name (a pointer + length), a 32-byte BLAKE3 derive-key fingerprint of the rule name (precomputed at engine construction for identity-chain derivation), and the minimum confidence threshold. The fingerprint is the dominant size contributor — 32 of the struct's 56 bytes. Storing these fields here instead of in `RuleCompiled` avoids polluting the hot array with data that is read once per emitted finding, not once per candidate window.
 
 The same hot/cold split applies to `ScanScratch`. From `scratch.rs`:
 

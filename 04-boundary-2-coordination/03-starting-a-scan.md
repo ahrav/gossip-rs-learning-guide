@@ -500,8 +500,8 @@ pub fn default_claim_next_available<'a, B: CoordinationBackend + RunManagement>(
             Err(AcquireError::TenantMismatch { expected }) => {
                 return Err(ClaimError::TenantMismatch { expected });
             }
-            Err(AcquireError::BackendError { message }) => {
-                return Err(ClaimError::BackendError { message });
+            Err(AcquireError::BackendError(infra)) => {
+                return Err(ClaimError::BackendError(infra));
             }
         }
     };
@@ -596,9 +596,10 @@ Each candidate might fail for different reasons:
   Track it and continue, but `debug_assert` to catch it in tests.
 - **`TenantMismatch`** -- This is not a race; it is a logic bug. Fail
   immediately because retrying other candidates would hit the same mismatch.
-- **`BackendError`** -- A transient infrastructure error from the coordination
-  backend. Fail immediately because retrying other candidates is unlikely to
-  succeed if the backend itself is unhealthy.
+- **`BackendError(infra)`** -- An infrastructure error from the coordination
+  backend, wrapped in an `InfraError` that classifies it as either `Transient`
+  (retryable) or `Corruption` (permanent). Fail immediately because retrying
+  other candidates is unlikely to succeed if the backend itself is unhealthy.
 
 #### Step 6: Post-loop safety check
 
@@ -634,7 +635,7 @@ pub enum ClaimError {
     RunNotFound,
     TenantMismatch { expected: TenantId },
     Throttled { retry_after: LogicalTime },
-    BackendError { message: String },
+    BackendError(InfraError),
 }
 ```
 
@@ -646,12 +647,16 @@ distinguish "no shards exist" from "all shards were grabbed by other workers"
 
 The `Throttled` variant is for claim cooldown, covered in section 3.10.
 
-The `BackendError` variant surfaces transient infrastructure errors from the
+The `BackendError` variant surfaces infrastructure errors from the
 coordination backend (e.g., network timeout, storage unavailability). The
 caller may retry after a backoff. This variant propagates from both
 `GetRunError::BackendError` (via the `From<GetRunError>` impl on the
-candidate-collection path) and `AcquireError::BackendError` (when a
-per-shard acquire attempt hits an infrastructure failure).
+candidate-collection path) and `AcquireError::BackendError(InfraError)`
+(when a per-shard acquire attempt hits an infrastructure failure). The
+`InfraError` enum classifies failures as `Transient` (retryable) or
+`Corruption` (permanent), but `ClaimError` flattens this into a `message`
+string since callers at the claim level treat all backend failures as
+retry-eligible.
 
 ### 3.8.4 Complexity Analysis
 

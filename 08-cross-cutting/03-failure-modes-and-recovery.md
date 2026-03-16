@@ -187,29 +187,28 @@ sequenceDiagram
     B4->>S: API request
     S-xB4: Timeout (network partition)
 
-    Note over B4: Circuit breaker detects failure
+    Note over B4: Connector returns retryable error
     B4->>B4: Increment failure count
-    B4-->>W: Error (source unreachable)
+    B4-->>W: EnumerateError (retryable)
 
     W->>W: Retry with backoff
     W->>B4: scan again via runtime dispatch
     B4->>S: API request
     S-xB4: Timeout again
 
-    Note over B4: Circuit breaker opens
-    B4-->>W: CircuitBreakerOpen error
+    Note over B4: Failure count exceeds threshold
+    B4-->>W: Error (too many transient failures)
 
-    W->>B2: park_shard(reason: SourceUnreachable)
+    W->>B2: park_shard(reason: TooManyErrors)
     B2->>B2: Mark shard as parked
     Note over W: Worker stops scanning this shard
 ```
 
 **Recovery**:
 1. Network partition heals
-2. Circuit breaker transitions to half-open state (after cooldown)
-3. Next worker attempts to enumerate → triggers test request
-4. Test request succeeds → circuit breaker closes
-5. Worker resumes scanning
+2. Admin verifies source health, unparks the shard
+3. Next worker acquires the shard (new fence epoch)
+4. Worker resumes scanning from last committed cursor
 
 **Guarantee**: Isolated failure. Other connectors/shards unaffected.
 
@@ -251,6 +250,11 @@ The source system (GitHub, S3, etc.) is down or rate-limiting aggressively.
 
 ### What Happens
 
+> **Note**: Circuit breaker logic is an aspirational design pattern -- not yet
+> implemented in the codebase. The current system parks shards via
+> `ParkReason::TooManyErrors` after exhausting retry budgets. The state
+> diagram below illustrates the intended future design.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Closed: Initial state
@@ -277,47 +281,57 @@ stateDiagram-v2
     end note
 ```
 
-**Step-by-step**:
+**Step-by-step** (current behavior):
 1. Connector makes API request → fails
-2. Circuit breaker increments failure count
-3. After N failures → circuit breaker opens
-4. Subsequent requests fail fast (no actual API call)
-5. Worker parks shard with `ParkReason::SourceUnreachable`
-6. Other connectors are unaffected (independent circuit breakers)
+2. Retry logic re-attempts with backoff
+3. After exhausting retry budget → worker parks shard
+4. Worker parks shard with `ParkReason::TooManyErrors`
+5. Other connectors are unaffected (isolation by shard assignment)
 
-**After cooldown period**:
-1. Circuit breaker transitions to half-open
-2. Next worker attempts enumeration
-3. Circuit breaker allows one test request
-4. If test succeeds → circuit breaker closes → scanning resumes
-5. If test fails → circuit breaker re-opens → cooldown resets
+**After admin unpark** (current behavior):
+1. Admin verifies source health, unparks the shard
+2. Next worker acquires the shard with a new fence epoch
+3. Worker attempts enumeration
+4. If successful → scanning resumes normally
+5. If still failing → shard is parked again with `TooManyErrors`
 
 ### Recovery Path
 
+Circuit breaker logic is an aspirational design goal -- not yet implemented
+in the codebase. The current recovery model relies on `ParkReason` variants
+and the coordination layer's park/unpark lifecycle. The pseudocode below
+illustrates the intended design direction:
+
 ```rust
-// Worker detects circuit breaker open (design-stage pseudocode)
+// Aspirational design -- illustrates how circuit breaker state
+// would feed into the coordination park/unpark lifecycle.
 match driver.run(engine, config, events, commits, cancel) {
-    Err(err) if err.is_circuit_breaker_open() => {
-        // Park the shard
+    Err(err) if err.is_retryable() && retry_budget_exhausted => {
+        // Too many transient failures -- park the shard.
         coordinator.park_shard(
             tenant,
             run_id,
             shard_id,
-            ParkReason::SourceUnreachable {
-                retry_after: cooldown_until,
-            },
+            ParkReason::TooManyErrors,
         )?;
 
-        // Release lease
+        // Release lease so other workers can proceed.
         coordinator.release_lease(tenant, run_id, shard_id)?;
-
-        // Worker moves to next shard or waits
+    }
+    Err(err) if err.is_permanent() => {
+        // Permanent failure -- park with a specific reason.
+        coordinator.park_shard(
+            tenant,
+            run_id,
+            shard_id,
+            ParkReason::PermissionDenied, // or NotFound, depending on error
+        )?;
     }
     // ... other cases
 }
 ```
 
-**Guarantee**: Source outage does not cascade. Circuit breaker contains the failure. Other connectors continue working.
+**Guarantee**: Source outage does not cascade. Error classification and shard parking contain the failure. Other connectors continue working.
 
 ## Failure Mode 5: Data Corruption
 
@@ -424,15 +438,15 @@ sequenceDiagram
 | Coordinator crash (persistent backend) | Health check | Restart, rebuild from DB | None | Restart time |
 | Coordinator crash (in-memory) | Health check | Restart run from scratch | All run state | N/A (restart run) |
 | Network partition (worker ↔ coordinator) | Commit timeout | Lease expires, re-acquire | None | Partition duration |
-| Network partition (worker ↔ source) | Circuit breaker | Park shard, retry after cooldown | None | Cooldown period |
-| Source outage | Circuit breaker | Park shard, retry when healthy | None | Outage duration |
+| Network partition (worker ↔ source) | Repeated failures | Park shard (TooManyErrors), retry after cooldown | None | Cooldown period |
+| Source outage | Repeated failures | Park shard (TooManyErrors), retry when healthy | None | Outage duration |
 | Data corruption | Derivation mismatch, checksum | Re-scan or discard | Corrupted records only | Re-scan time |
 | Split-brain | Fencing token mismatch | Reject stale worker | None (prevented) | None (prevented) |
 
 ## Recovery Principles
 
 ### 1. Fail Fast
-- Circuit breakers prevent cascading failures
+- Error classification forces binary retry decisions at construction time
 - Fencing tokens reject stale operations immediately
 - Timeouts prevent indefinite blocking
 
@@ -448,7 +462,7 @@ sequenceDiagram
 
 ### 4. Recover Automatically
 - Lease expiry → automatic reassignment
-- Circuit breaker cooldown → automatic retry
+- ParkReason::TooManyErrors → suitable for time-delayed auto-retry
 - Idempotent operations → safe to retry
 
 ### 5. Minimize Blast Radius
@@ -525,9 +539,11 @@ async fn network_partition_recovery() {
 
 ### Symptom: Shards are parked
 **Check**: `ParkReason` in shard records.
-- `SourceUnreachable`: Check source system health. Wait for cooldown, retry.
-- `CircuitBreakerOpen`: Check connector circuit breaker state. Investigate source errors.
-- `RateLimited`: Increase delay between requests or request rate limit increase from source.
+- `PermissionDenied`: Connector lacks access to the scan target. Check credentials, rotate tokens, or verify access grants.
+- `NotFound`: Scan target no longer exists (deleted repo, removed file). Confirm target existence before unparking.
+- `Poisoned`: Shard state is internally inconsistent. Requires manual investigation.
+- `TooManyErrors`: Accumulated transient errors exceeded threshold. May resolve on its own; suitable for time-delayed auto-retry.
+- `Other`: Check coordinator logs for additional diagnostic context.
 
 ### Symptom: Run is not completing
 **Check**: Shard states. Are any shards stuck?
@@ -550,8 +566,8 @@ async fn network_partition_recovery() {
 Gossip-rs is designed to handle failures at every layer:
 - **Worker failures**: Lease expiry + cursor atomicity ensure no data loss
 - **Coordinator failures**: Persistent backend enables restart without data loss
-- **Network partitions**: Fencing tokens prevent split-brain, circuit breakers contain source failures
-- **Source outages**: Circuit breakers prevent cascading failures, park shards for retry
+- **Network partitions**: Fencing tokens prevent split-brain, error classification contains source failures
+- **Source outages**: Park shards with `TooManyErrors` for deferred retry; other connectors unaffected
 - **Data corruption**: Content-addressed identities enable detection, re-scanning enables recovery
 
 The system prioritizes **safety** (no split-brain, no corruption propagation) over **liveness** (brief unavailability during recovery is acceptable).

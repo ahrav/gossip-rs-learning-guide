@@ -336,7 +336,7 @@ RuleSpec (api.rs)
   │                          │   the u32 index back onto RuleCompiled.
   │                          ▼
   │                     RuleCompiled   ── hot array iterated per buffer
-  │                     RuleCold       ── parallel cold array (name, min confidence)
+  │                     RuleCold       ── parallel cold array (name, fingerprint, min confidence)
   │
   ├─ add_pat_raw/owned() ──► anchor map
   │                              ▼
@@ -368,6 +368,9 @@ pub(super) struct RuleCompiled {
 ```rust
 pub(super) struct RuleCold {
     pub(super) name: &'static str,
+    /// BLAKE3 derive-key fingerprint of the rule name, precomputed at engine
+    /// construction for identity-chain derivation.
+    pub(super) fingerprint: [u8; 32],
     pub(super) min_confidence: i8,
 }
 ```
@@ -376,10 +379,10 @@ Size is enforced at compile time:
 
 ```rust
 const _: () = assert!(std::mem::size_of::<RuleCompiled>() <= 88);
-const _: () = assert!(std::mem::size_of::<RuleCold>() <= 24);
+const _: () = assert!(std::mem::size_of::<RuleCold>() <= 56);
 ```
 
-**Why two tiers?** The scan loop iterates `rules_hot` (the `Vec<RuleCompiled>`) for every merged window. That loop touches `re`, `must_contain`, and `rule_meta` on every candidate, then gate indices only when a gate is present. Cold metadata -- the human-readable rule name, the minimum confidence threshold -- is only needed when a finding survives all gates and is about to be emitted. Storing cold metadata inline would inflate `RuleCompiled` beyond a cache-line pair and waste cache capacity on data read once per emitted finding, not once per candidate window.
+**Why two tiers?** The scan loop iterates `rules_hot` (the `Vec<RuleCompiled>`) for every merged window. That loop touches `re`, `must_contain`, and `rule_meta` on every candidate, then gate indices only when a gate is present. Cold metadata -- the human-readable rule name, the 32-byte BLAKE3 derive-key fingerprint (precomputed for identity-chain derivation), and the minimum confidence threshold -- is only needed when a finding survives all gates and is about to be emitted. The fingerprint accounts for most of `RuleCold`'s 56 bytes (32 of 56), but the growth is acceptable because the cold array is never touched in the hot per-window scan loop. Storing cold metadata inline would inflate `RuleCompiled` beyond a cache-line pair and waste cache capacity on data read once per emitted finding, not once per candidate window.
 
 ### 5.1 Gate Pooling with the NO_GATE Sentinel
 

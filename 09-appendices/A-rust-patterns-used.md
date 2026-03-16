@@ -436,7 +436,7 @@ impl std::error::Error for IdentityInputError {}
 **Where used in Gossip-rs**:
 - `IdentityInputError` (identity derivation errors)
 - `CoordError` (coordination layer errors)
-- `ConnectorError` (connector errors)
+- `ErrorClass`, `EnumerateError`, `ConnectorInputError`, `PageShapeError` (connector and persistence errors)
 
 **Benefits**:
 - Type-safe error handling (cannot confuse different error types)

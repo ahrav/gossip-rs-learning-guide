@@ -372,29 +372,30 @@ From `page_commit.rs`:
 ```rust
 #[must_use = "page commits must be driven to a durable receipt or explicitly dropped"]
 pub struct PageCommit<S> {
-    scope: Arc<PageCommitScope>,
+    scope: Arc<CommitScope>,
     state: S,
 }
 ```
 
 Each state is a separate type (`AwaitingFindings`, `FindingsDurable`, `ItemDurable`, `CheckpointDurable`), and transition methods exist only on the correct state. Calling `record_done_ledger` on a `PageCommit<AwaitingFindings>` is a compile error, not a runtime panic.
 
-Each transition offers two advancement paths: `record_*` (caller already holds the receipt) and `wait_*` (caller passes a `CommitHandle`; the method waits and validates). The `PageCommitScope` captures the immutable context for one page commit -- tenant, run, shard, fence epoch, item count, and cursor:
+Each transition offers two advancement paths: `record_*` (caller already holds the receipt) and `wait_*` (caller passes a `CommitHandle`; the method waits and validates). The `CommitScope` captures the immutable context for one page commit -- tenant, policy, run, shard, fence epoch, unit count, and checkpoint boundary:
 
 From `page_commit.rs`:
 
 ```rust
-pub struct PageCommitScope {
+pub struct CommitScope {
     tenant_id: TenantId,
+    policy_hash: PolicyHash,
     run_id: RunId,
     shard_id: ShardId,
     fence_epoch: FenceEpoch,
-    committed_items: u64,
-    checkpoint_cursor: Cursor,
+    committed_units: NonZeroU64,
+    checkpoint_boundary: CheckpointBoundary,
 }
 ```
 
-The done-ledger transition validates that the receipt's `record_count` matches `scope.committed_items()`. The checkpoint transition validates that the receipt's embedded `PageCommitScope` matches the page's scope exactly. These validations catch receipt mix-ups between concurrent pages at the earliest possible point.
+The done-ledger transition validates that the receipt's `record_count` matches `scope.committed_units()`. The checkpoint transition validates that the receipt's embedded `CommitScope` matches the page's scope exactly. These validations catch receipt mix-ups between concurrent pages at the earliest possible point.
 
 **Rationale:** The alternative -- a runtime state enum with panics on invalid transitions -- trades compile-time safety for simpler generics. Given that incorrect ordering is a data-loss bug (findings committed after a cursor advance that is already visible to restart logic), compile-time enforcement is worth the generics cost. The `wait_*` methods consume the state machine on failure: after a backend wait error, the page's I/O state is unknown, so the only safe action is to reconstruct a new `PageCommit` and retry from `AwaitingFindings`. Chapter 4 covers the typestate machine in depth.
 
@@ -406,7 +407,7 @@ The commit protocol produces a hierarchy of receipts proving what became durable
 |---------|--------|----------|
 | `FindingsCommitReceipt` | Three-layer findings data is durable | `finding_count`, `occurrence_count`, `observation_count` |
 | `DoneLedgerCommitReceipt` | Done-ledger rows are durable | `record_count`, `scanned_count`, `findings_count` |
-| `CheckpointCommitReceipt` | Cursor checkpoint is durable | `PageCommitScope`, `checkpointed_at` |
+| `CheckpointCommitReceipt` | Cursor checkpoint is durable | `CommitScope`, `checkpointed_at` |
 | `ItemCommitReceipt` | Composite: findings + done-ledger | Contains both sub-receipts |
 | `PageCommitReceipt` | Terminal: entire page is durable | `ItemCommitReceipt` + `CheckpointCommitReceipt` |
 
@@ -536,7 +537,10 @@ Chapter 6 covers the conformance harness in depth.
 | `ItemCommitReceipt` | `gossip-contracts/persistence` | Composite: findings + done-ledger |
 | `PageCommitReceipt` | `gossip-contracts/persistence` | Terminal: full page durable |
 | `PageCommit<S>` | `gossip-contracts/persistence` | Typestate machine for commit ordering |
-| `PageCommitScope` | `gossip-contracts/persistence` | Immutable scope for one page commit |
+| `CommitScope` | `gossip-contracts/persistence` | Immutable scope for one page commit |
+| `WriteContext` | `gossip-contracts/persistence` | Shared write-side routing and fencing metadata (tenant, policy, run, shard, epoch) |
+| `CheckpointBoundary` | `gossip-contracts/persistence` | Family-neutral durable checkpoint boundary (ordered-content or repo-frontier) |
+| `CheckpointBoundaryKind` | `gossip-contracts/persistence` | Semantic domain tag for checkpoint boundaries |
 | `PersistenceInputError` | `gossip-contracts/persistence` | Input validation error enum |
 | `RECOMMENDED_MAX_BATCH_SIZE` | `gossip-contracts/persistence` | Batch size guidance (10,000) |
 | `run_conformance` | `gossip-contracts/persistence` | Conformance harness entry point (11 checks) |
