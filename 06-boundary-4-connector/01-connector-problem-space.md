@@ -50,12 +50,11 @@ they consume (shard specs, budgets, resume cursors).
 
 ---
 
-## The Family-Based Connector Architecture
+## The Two Method Groups
 
-Rather than forcing all connectors through a single trait with methods that
-some sources cannot meaningfully implement, the connector contract organizes
-runtime behavior into *families* -- groups of traits that match a source's
-natural execution model.
+The connector contract organizes runtime behavior into two method groups:
+enumeration methods for listing operations and read methods for content
+access. This separation is not accidental.
 
 Enumeration and reading have fundamentally different resource profiles.
 Enumeration is metadata-bound: it lists object keys, file paths, or manifest
@@ -67,42 +66,58 @@ rate-limit ceilings, different cost tiers (S3 charges differently for LIST
 vs. GET), and different failure modes (a rate-limited LIST returns HTTP 503;
 a missing object returns HTTP 404).
 
-But the differences run deeper than just enumeration vs. read. A filesystem
-connector lists files in sorted order, opens them individually, and supports
-byte-range reads. A Git connector operates on whole repositories: commit
-walks, tree diffs, pack-order blob scans. These two sources share almost no
-operational surface beyond basic paging and error classification. Forcing
-them into a single trait would produce a lowest-common-denominator interface
-that serves neither well.
+By keeping the method groups separate, orchestration can compose them
+independently. A connector might enumerate items on one thread and read items
+on another. A circuit breaker can trip on the read path (too many 5xx errors
+fetching content) without halting enumeration. A test harness can mock
+enumeration while using a real read path, or vice versa.
 
-The contract layer addresses this with two connector families, each defined
-as a trait in its own module:
+Each concrete connector type (e.g., `FilesystemConnector`, `GitConnector`)
+provides these methods as inherent `pub fn` methods. The
+`OrderedContentSource` trait in `connector::ordered` provides a formal
+contract for ordered-content connectors, while the Git family uses its own
+trait surface in `connector::git`. The contract types in `api.rs`
+(`ConnectorCapabilities`, `EnumerateError`, `ReadError`) define the shared
+vocabulary that all connectors use.
 
-- **`ordered::OrderedContentSource`** -- For sources whose worker loop
-  naturally fills a bounded page of `ScanItem` values, then opens or
-  range-reads individual item bytes. Filesystem and in-memory connectors
-  implement this trait. The trait surface includes `capabilities()`,
-  `fill_page()`, `choose_split_point()`, `open()`, and `read_range()`.
+Three methods define the enumeration surface:
 
-- **`git::GitRepoExecutor`** (plus `git::GitRepoDiscoverySource` and
-  `git::GitMirrorManager`) -- For Git-backed sources that operate on whole
-  repositories rather than individual items. The Git family splits execution
-  into three phases: discovery (paging over repositories), mirroring
-  (acquiring a local clone), and execution (running repo-native scans
-  against the mirror).
+- **`pub fn caps(&self) -> ConnectorCapabilities`** -- A static declaration
+  of what the connector supports. Orchestration queries this at registration
+  time to plan its enumeration strategy. The capabilities are declarative
+  intent, not runtime guarantees -- callers must still handle errors from
+  operations that the connector claims to support.
 
-Both families compose from shared infrastructure: `common.rs` provides
-the paging vocabulary (`PageBuf`, `PageState`, `KeyedPageItem`), `types.rs`
-provides value wrappers (`ItemKey`, `ScanItem`, `Cursor`, `Budgets`), and
-`api.rs` provides error classification (`ErrorClass`, `EnumerateError`,
-`ReadError`, `ConnectorCapabilities`).
+- **`pub fn choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`** --
+  An optional hook for connectors that know where natural partition boundaries
+  exist (Git tree boundaries, S3 common prefixes). Connectors without
+  meaningful split knowledge return `Ok(None)`.
+
+Two methods define the read surface:
+
+- **`pub fn open(&mut self, item_ref: &ItemRef, budgets: Budgets) -> Result<Box<dyn io::Read + Send>, ReadError>`** --
+  Opens an item for sequential reading. The return type is a boxed trait
+  object. The heap allocation is acceptable because `open` is a WARM-path
+  operation (once per item, not once per byte). The `'static` constraint on
+  the reader means implementations must own their resources -- no borrowing
+  from `&self`.
+
+- **`pub fn read_range(&mut self, ...) -> Result<usize, ReadError>`** -- An
+  optional random-access fast path. Connectors without native range support
+  return `Err(ReadError::unsupported("range_read"))`. Connectors that support
+  range reads (S3 with byte-range headers, local filesystem with `seek`)
+  provide a real implementation. The method specifies overflow safety
+  requirements and EOF semantics (returning `Ok(0)` at end-of-item).
 
 ---
 
 ## The Five-Module Architecture
 
-The connector module is split into five focused modules, organized as shared
-infrastructure plus family-specific trait surfaces.
+The connector module is split into five focused submodules, each with a
+distinct responsibility. Two are internal organization units (`api`, `types`)
+whose public items are re-exported at the `connector::` boundary. Three are
+public namespaced modules (`common`, `ordered`, `git`) that define
+family-specific contracts.
 
 Here is the module structure from `mod.rs`:
 
@@ -114,81 +129,81 @@ pub mod ordered;
 mod types;
 ```
 
-The modules compose in a strict dependency order:
+The modules compose in a layered dependency order:
 
 ```text
-  Shared Layer 1: types.rs (private)
+  Layer 1: types.rs
   +-------------------------------------------------+
   | Validated value wrappers (ItemKey, ItemRef,      |
   | TokenBytes), Cursor, ScanItem, Budgets,          |
-  | ConnectorInputError, ToxicDigest, PooledByteSlab |
+  | ConnectorInputError, VersionId, ToxicDigest      |
   +-------------------------------------------------+
                           |
                           v
-  Shared Layer 2: api.rs (private)
+  Layer 2: api.rs
   +-------------------------------------------------+
   | ErrorClass, EnumerateError, ReadError,            |
   | ConnectorCapabilities                             |
   +-------------------------------------------------+
                           |
                           v
-  Shared Layer 3: common.rs (pub)
+  Layer 3: common.rs (pub)
   +-------------------------------------------------+
-  | PageBuf, PageState, PagingCapabilities,           |
-  | KeyedPageItem, PageShapeError, validate_filled_page|
+  | Shared paging vocabulary: PageBuf, PageState,     |
+  | PagingCapabilities, KeyedPageItem,                |
+  | validate_filled_page                              |
   +-------------------------------------------------+
-          |                               |
-          v                               v
-  Family: ordered.rs (pub)       Family: git.rs (pub)
-  +---------------------------+  +---------------------------+
-  | OrderedContentCapabilities|  | RepoKey, RepoLocator,     |
-  | OrderedContentSource trait|  | GitRepoTarget, GitSelection|
-  +---------------------------+  | LocalMirror, GitRunOutcome |
-                                 | GitRunError, GitExecutionLimits|
-                                 | GitDiscoveryCapabilities   |
-                                 | GitRepoDiscoverySource trait|
-                                 | GitMirrorManager trait     |
-                                 | GitRepoExecutor trait      |
-                                 +---------------------------+
+                       /     \
+                      v       v
+  Layer 4a: ordered.rs       Layer 4b: git.rs
+  +---------------------+   +------------------------+
+  | OrderedContent       |   | Git family contract:   |
+  |   Capabilities       |   |   RepoKey, RepoLocator,|
+  | OrderedContent       |   |   GitRepoTarget,       |
+  |   Source trait        |   |   GitRepoDiscovery     |
+  | (fill_page, open,    |   |   Source, GitMirror     |
+  |  read_range)         |   |   Manager, GitRepo     |
+  +---------------------+   |   Executor             |
+                             +------------------------+
 ```
 
-**types.rs** defines value types and validation errors. These are pure
+**Layer 1 (types)** defines value types and validation errors. These are pure
 data: no behavior beyond construction, access, and formatting. Every type
 validates at construction time (non-empty, bounded, correctly paired). This
 layer has no knowledge of traits or operations.
 
-**api.rs** defines the shared vocabulary for operation outcomes and
-capabilities. It imports value types from `types.rs` and defines the error
-types (`EnumerateError`, `ReadError`) that model operation outcomes, plus the
+**Layer 2 (api)** defines the shared vocabulary for operation outcomes and
+capabilities. It imports value types from Layer 1 and defines the error types
+(`EnumerateError`, `ReadError`) that model operation outcomes, plus the
 capability struct (`ConnectorCapabilities`) that advertises connector
-features. This layer knows about `ShardSpec` from Boundary 2's coordination
-module but does not depend on any runtime connector.
+features.
 
-**common.rs** defines the shared paging vocabulary reused across connector
-families. `PageBuf<T>` is a generic non-empty page container with a
-`PageState` (terminal or resumable). `KeyedPageItem` is a trait that page
-items implement so the validation function `validate_filled_page` can enforce
-ordering, uniqueness, and shard-bound rules generically. Both the ordered
-and Git families use this vocabulary.
+**Layer 3 (common)** defines shared paging vocabulary reused across connector
+families: `PageBuf`, `PageState`, `PagingCapabilities`, `KeyedPageItem`, and
+the `validate_filled_page` helper.
 
-**ordered.rs** defines the `OrderedContentSource` trait for connectors whose
-execution model is page-fill-then-read: filesystem connectors, in-memory
-test connectors, and any future connector that enumerates items in sorted
-order and reads them individually.
+**Layer 4a (ordered)** defines the ordered-content family contract:
+`OrderedContentCapabilities` and the `OrderedContentSource` trait with
+`fill_page`, `open`, `read_range`, and `choose_split_point` methods. This
+family models sources whose worker loop fills bounded ordered pages of
+`ScanItem` values.
 
-**git.rs** defines the Git family: three traits (`GitRepoDiscoverySource`,
-`GitMirrorManager`, `GitRepoExecutor`) plus the value types they operate on
-(`RepoKey`, `RepoLocator`, `GitRepoTarget`, `GitSelection`, `LocalMirror`,
-`GitExecutionLimits`, `GitRunOutcome`, `GitRunError`). The Git family
-operates on whole repositories rather than individual items, so it has no
-`open()` or `read_range()` methods.
+**Layer 4b (git)** defines the Git family contract: `RepoKey`, `RepoLocator`,
+`GitRepoTarget`, `GitSelection`, `LocalMirror`, `GitExecutionLimits`,
+`GitRunOutcome`, `GitRunError`, `GitDiscoveryCapabilities`,
+`GitRepoDiscoverySource`, `GitMirrorManager`, and `GitRepoExecutor`. This
+family models whole-repository execution rather than item-by-item enumeration.
 
-The `mod.rs` re-exports flatten the shared layers (`types.rs`, `api.rs`,
-`common.rs`) into a single import boundary. Family modules stay namespaced:
-callers import `connector::ordered::OrderedContentSource` or
-`connector::git::GitRepoExecutor`. Runtime crates import from
-`gossip_contracts::connector` and receive shared types without needing to
-know which internal module defines each type.
+Family modules compose from the shared layers instead of inheriting a single
+universal connector model: `ordered` and `git` depend on `common`, `types`,
+and `api` for paging, value wrappers, and error classification.
+
+The `mod.rs` re-exports flatten `api` and `types` into a single import
+boundary at `gossip_contracts::connector`. The family contracts stay
+namespaced under `connector::ordered` and `connector::git`, and the paging
+vocabulary is accessible under `connector::common`. Runtime crates import
+from `gossip_contracts::connector` and receive shared types without needing
+to know which internal module defines each type.
 
 ---
 
@@ -201,17 +216,12 @@ from becoming a catch-all.
 **What connectors own:**
 
 - Value types for scan data (`ItemKey`, `ItemRef`, `TokenBytes`,
-  `Cursor`, `ScanItem`, `PooledByteSlab`).
-- Shared paging vocabulary (`PageBuf`, `PageState`, `PagingCapabilities`,
-  `KeyedPageItem`, `PageShapeError`, `validate_filled_page`).
-- API vocabulary for error classification and capability negotiation
-  (`ConnectorCapabilities`, `ErrorClass`, `EnumerateError`, `ReadError`).
-- Family-specific trait surfaces: `OrderedContentSource` for item-at-a-time
-  connectors, `GitRepoDiscoverySource` / `GitMirrorManager` /
-  `GitRepoExecutor` for repo-native Git execution.
-- Git family value types (`RepoKey`, `RepoLocator`, `GitRepoTarget`,
-  `GitSelection`, `LocalMirror`, `GitExecutionLimits`, `GitRunOutcome`,
-  `GitRunError`).
+  `Cursor`, `ScanItem`).
+- API vocabulary for split-point selection and reading (`ConnectorCapabilities`,
+  `EnumerateError`, `ReadError`).
+- Error classification for operation outcomes (`ErrorClass`,
+  `EnumerateError`, `ReadError`).
+- Capability negotiation (`ConnectorCapabilities`).
 
 **What connectors do not own:**
 
@@ -277,24 +287,24 @@ The dependency direction is strict and uni-directional:
 
 ```text
   Tier 0: gossip-contracts
-  +------------------------------------------+
-  | connector::types     (value wrappers)     |
-  | connector::api       (error & capability) |
-  | connector::common    (paging vocabulary)  |
-  | connector::ordered   (OrderedContentSource)|
-  | connector::git       (Git family traits)  |
-  | coordination::*      (shard, cursor, ...)  |
-  | identity::*          (StableItemId, ...)   |
-  +------------------------------------------+
+  +----------------------------------------------+
+  | connector::types     (value wrappers)         |
+  | connector::api       (error & capability types)|
+  | connector::common    (paging vocabulary)       |
+  | connector::ordered   (OrderedContentSource)    |
+  | connector::git       (git family contract)     |
+  | coordination::*      (shard, cursor, ...)      |
+  | identity::*          (StableItemId, ...)       |
+  +----------------------------------------------+
                     ^
                     | depends on
                     |
-  Tier 1: gossip-connectors (FilesystemConnector, GitConnector, InMemoryDeterministicConnector)
-  +------------------------------------------+
-  | FilesystemConnector  (ordered-content)    |
-  | GitConnector         (git execution)      |
-  | InMemoryDeterministicConnector (ordered)  |
-  +------------------------------------------+
+  Tier 1: gossip-connectors (filesystem, git, in-memory), ...
+  +----------------------------------------------+
+  | FilesystemConnector (ordered-content family)  |
+  | GitConnector        (ordered-content family)  |
+  | InMemoryDeterministicConnector                |
+  +----------------------------------------------+
 ```
 
 There is no mutual dependency between Boundary 2 (coordination) and
@@ -456,15 +466,16 @@ opts in to features; it never needs to opt out.
 ## Summary
 
 The connector contract layer in `gossip-contracts::connector` provides a
-uniform interface over heterogeneous data sources through a family-based
-architecture. Rather than forcing all connectors through a single trait,
-two connector families -- `ordered::OrderedContentSource` for item-at-a-time
-sources and `git::GitRepoExecutor` (plus `GitRepoDiscoverySource` and
-`GitMirrorManager`) for repo-native Git execution -- capture the natural
-execution model of each source type. Five internal modules (types, api,
-common, ordered, git) separate value validation from API vocabulary from
-paging infrastructure from family-specific trait surfaces. The toxic-byte
-principle ensures that `Debug` and `Display` never emit raw connector bytes,
+uniform interface over heterogeneous data sources. Two method groups --
+planning (`caps`, `choose_split_point`) for shard management and
+read (`open`, `read_range`) for content access -- model operations with
+independent scaling and failure characteristics. Concrete connector types
+provide these as inherent methods; polymorphism lives at the family-specific
+trait layer (`OrderedContentSource` for ordered-content connectors, dedicated
+Git traits for repository execution). Five submodules (types, api, common,
+ordered, git) separate value validation from API vocabulary, shared paging
+primitives, and family-specific contracts. The toxic-byte principle
+ensures that `Debug` and `Display` never emit raw connector bytes,
 preventing accidental secret leakage into logs. Error classification splits
 cleanly into input validation (`ConnectorInputError`) and operation outcomes
 (`EnumerateError`, `ReadError`), with a binary `ErrorClass` that

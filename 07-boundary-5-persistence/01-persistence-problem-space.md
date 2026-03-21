@@ -16,7 +16,7 @@ Gossip-rs separates persistence into two trait surfaces at different abstraction
 
 ### CommitSink: The Scan-Time Interface
 
-The `CommitSink` trait lives in `gossip-scanner-runtime` and defines the per-item lifecycle that scan drivers call during execution. Drivers know nothing about done-ledgers, findings sinks, or commit ordering -- they call three methods in sequence for each scanned item.
+The `CommitSink` trait lives in `gossip-scanner-runtime/src/commit_sink.rs` and defines the per-item lifecycle that scan drivers call during execution. Drivers know nothing about done-ledgers, findings sinks, or commit ordering -- they call three methods in sequence for each scanned item.
 
 From `gossip-scanner-runtime/src/commit_sink.rs`:
 
@@ -52,14 +52,15 @@ pub struct FindingRecord {
 }
 ```
 
-**Rationale:** Keeping `CommitSink` simple serves two purposes. First, scan drivers should not need to understand tenant scoping, policy hashing, or identity chain derivation -- those are runtime concerns. Second, `NoOpCommitSink` provides a zero-cost test double for CLI mode where findings flow only through the event stream:
+**Rationale:** Keeping `CommitSink` simple serves two purposes. First, scan drivers should not need to understand tenant scoping, policy hashing, or identity chain derivation -- those are runtime concerns. Second, `CliNoOpCommitSink` provides a zero-cost test double for CLI mode where findings flow only through the event stream:
 
 From `gossip-scanner-runtime/src/commit_sink.rs`:
 
 ```rust
-pub struct NoOpCommitSink;
+/// No-op sink used by CLI and direct-mode scans.
+pub struct CliNoOpCommitSink;
 
-impl CommitSink for NoOpCommitSink {
+impl CommitSink for CliNoOpCommitSink {
     fn begin_item(&self, _item_key: &ItemKey, _meta: &ItemMeta) -> Result<()> {
         Ok(())
     }
@@ -127,25 +128,11 @@ pub trait CommitHandle: Send + 'static {
 
 ### How the Two Surfaces Connect
 
-The runtime bridges `CommitSink` to the persistence traits through `DurableCommitSink` in `gossip-scanner-runtime`. When a scan driver calls `begin_item` / `upsert_findings` / `finish_item`, the `DurableCommitSink` derives the full identity chain (`norm_hash` -> `secret_hash` -> `finding_id` -> `occurrence_id`), constructs the three-layer findings records, and flushes them through `FindingsSink` and `DoneLedger`.
+The runtime bridges `CommitSink` to the persistence traits through the receipt-driven execution pipeline in `gossip-scanner-runtime`. Distributed execution routes the `CommitSink` lifecycle into the receipt-driven commit pipeline (`ReceiptCommitSink` feeding `ResultCommitter`), while direct CLI scans use `CliNoOpCommitSink`. When a scan driver calls `begin_item` / `upsert_findings` / `finish_item`, the durable pipeline derives the full identity chain (`norm_hash` -> `secret_hash` -> `finding_id` -> `occurrence_id`), constructs the three-layer findings records, and flushes them through `FindingsSink` and `DoneLedger`.
 
-From `gossip-scanner-runtime/src/commit_sink.rs`:
+The key transformation: `commit_sink::FindingRecord` (five flat fields, no tenant context) becomes `FindingRecord` + `OccurrenceRecord` + `ObservationRecord` (fully scoped, content-addressed, referentially closed) before reaching the persistence traits.
 
-```rust
-pub struct DurableCommitSink {
-    shard_id: Arc<str>,
-    recorder: std::sync::Arc<dyn CoordinationEventRecorder>,
-    tenant_id: TenantId,
-    tenant_secret_key: TenantSecretKey,
-    in_flight_meta: Mutex<BTreeMap<Vec<u8>, ItemMeta>>,
-}
-```
-
-The `DurableCommitSink` stores per-item metadata from `begin_item` in `in_flight_meta` so that `upsert_findings` can use connector-provided version IDs when constructing `OccurrenceRecord` and `ObservationRecord` instances. The derivation flow is: `norm_hash` (from the scan engine) -> `secret_hash` (keyed with `tenant_secret_key`) -> `finding_id` (content-addressed from `tenant + stable_item + rule + secret_hash`) -> `occurrence_id` (content-addressed from `finding + version + byte_span`). Each step uses BLAKE3 with domain-separated derivation keys.
-
-The key transformation: `CommitSink::FindingRecord` (five flat fields, no tenant context) becomes `FindingRecord` + `OccurrenceRecord` + `ObservationRecord` (fully scoped, content-addressed, referentially closed) before reaching the persistence traits.
-
-**Rationale:** The two-surface split exists because scan drivers and persistence backends have fundamentally different concerns. A git pack walker cares about byte offsets and rule matches. A SQLite backend cares about referential integrity and monotonic merge semantics. Forcing both into a single trait would either expose backend details to drivers (leaking abstraction upward) or hide persistence invariants from backends (weakening contracts downward). The `DurableCommitSink` adapter sits at the boundary where domain knowledge from both sides converges.
+**Rationale:** The two-surface split exists because scan drivers and persistence backends have fundamentally different concerns. A git pack walker cares about byte offsets and rule matches. A SQLite backend cares about referential integrity and monotonic merge semantics. Forcing both into a single trait would either expose backend details to drivers (leaking abstraction upward) or hide persistence invariants from backends (weakening contracts downward). The receipt-driven commit pipeline sits at the boundary where domain knowledge from both sides converges.
 
 ## Architecture: The Full Persistence Stack
 
@@ -157,10 +144,10 @@ The key transformation: `CommitSink::FindingRecord` (five flat fields, no tenant
                            │  begin_item / upsert_findings / finish_item
                            ▼
 ┌───────────────────────────────────────────────────────────┐
-│              CommitSink  (gossip-scanner-runtime)           │
+│          CommitSink  (gossip-scanner-runtime)              │
 │                                                           │
 │  ┌─────────────────┐          ┌────────────────────────┐  │
-│  │ NoOpCommitSink  │          │  DurableCommitSink     │  │
+│  │CliNoOpCommitSink│          │  ReceiptCommitSink     │  │
 │  │ (CLI mode)      │          │  (distributed mode)    │  │
 │  └─────────────────┘          └───────────┬────────────┘  │
 └───────────────────────────────────────────┼───────────────┘
@@ -379,7 +366,7 @@ pub struct PageCommit<S> {
 
 Each state is a separate type (`AwaitingFindings`, `FindingsDurable`, `ItemDurable`, `CheckpointDurable`), and transition methods exist only on the correct state. Calling `record_done_ledger` on a `PageCommit<AwaitingFindings>` is a compile error, not a runtime panic.
 
-Each transition offers two advancement paths: `record_*` (caller already holds the receipt) and `wait_*` (caller passes a `CommitHandle`; the method waits and validates). The `CommitScope` captures the immutable context for one page commit -- tenant, policy, run, shard, fence epoch, unit count, and checkpoint boundary:
+Each transition offers two advancement paths: `record_*` (caller already holds the receipt) and `wait_*` (caller passes a `CommitHandle`; the method waits and validates). The `CommitScope` captures the immutable context for one page commit -- tenant, run, shard, fence epoch, item count, and cursor:
 
 From `page_commit.rs`:
 
@@ -436,7 +423,7 @@ where
 
 ## Input Validation: PersistenceInputError
 
-The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers twelve validation failure modes:
+The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers ten validation failure modes:
 
 From `error.rs`:
 
@@ -452,12 +439,10 @@ pub enum PersistenceInputError {
     UnexpectedErrorCode { status: &'static str },
     OrphanedReference { child_type: &'static str, parent_type: &'static str },
     InconsistentTenant,
-    ProvenanceOrdering { started_at: u64, finished_at: u64 },
-    KeyMismatch { existing: Box<DoneLedgerKey>, incoming: Box<DoneLedgerKey> },
 }
 ```
 
-**Rationale:** Each variant catches a specific contract violation at the earliest possible point. `DoneLedgerRecord::try_new` rejects a `ScannedWithFindings` status with `findings_count == 0`, and vice versa for `ScannedClean` with `findings_count > 0`. `OccurrenceRecord::try_new` rejects zero-length byte spans. `ObservationRecord::from_persisted` rejects observation IDs that do not match the canonical derivation. `ProvenanceOrdering` rejects done-ledger records where `started_at` exceeds `finished_at` -- a temporal invariant checked at both construction (via `debug_assert`) and at the persistence boundary. `KeyMismatch` rejects merge operations where two records have different `DoneLedgerKey` values -- merging records for different object-versions is a logic error that must be caught before mutation. The `DoneLedgerErrorCode` constructor restricts error codes to a small ASCII-safe alphabet (alphanumeric plus `' '`, `'_'`, `'-'`, `'.'`, `':'`, `'/'`), with a maximum size of 128 bytes -- raw connector output or user-supplied strings never enter this field.
+**Rationale:** Each variant catches a specific contract violation at the earliest possible point. `DoneLedgerRecord::try_new` rejects a `ScannedWithFindings` status with `findings_count == 0`, and vice versa for `ScannedClean` with `findings_count > 0`. `OccurrenceRecord::try_new` rejects zero-length byte spans. `ObservationRecord::from_persisted` rejects observation IDs that do not match the canonical derivation. The `DoneLedgerErrorCode` constructor restricts error codes to a small ASCII-safe alphabet (alphanumeric plus `' '`, `'_'`, `'-'`, `'.'`, `':'`, `'/'`), with a maximum size of 128 bytes -- raw connector output or user-supplied strings never enter this field.
 
 ## Conformance Testing
 
@@ -517,8 +502,7 @@ Chapter 6 covers the conformance harness in depth.
 | Type | Module | Purpose |
 |------|--------|---------|
 | `CommitSink` | `gossip-scanner-runtime` | Per-item commit lifecycle for scan drivers |
-| `NoOpCommitSink` | `gossip-scanner-runtime` | Zero-cost CLI/test double |
-| `DurableCommitSink` | `gossip-scanner-runtime` | Identity derivation bridge to persistence traits |
+| `CliNoOpCommitSink` | `gossip-scanner-runtime` | Zero-cost CLI/test double |
 | `DoneLedger` | `gossip-contracts/persistence` | Deduplication tracking trait |
 | `DoneLedgerKey` | `gossip-contracts/persistence` | Composite key: `(tenant, policy, ovid)` |
 | `DoneLedgerStatus` | `gossip-contracts/persistence` | Join-semilattice status enum |
@@ -540,9 +524,6 @@ Chapter 6 covers the conformance harness in depth.
 | `PageCommitReceipt` | `gossip-contracts/persistence` | Terminal: full page durable |
 | `PageCommit<S>` | `gossip-contracts/persistence` | Typestate machine for commit ordering |
 | `CommitScope` | `gossip-contracts/persistence` | Immutable scope for one page commit |
-| `WriteContext` | `gossip-contracts/persistence` | Shared write-side routing and fencing metadata (tenant, policy, run, shard, epoch) |
-| `CheckpointBoundary` | `gossip-contracts/persistence` | Family-neutral durable checkpoint boundary (ordered-content or repo-frontier) |
-| `CheckpointBoundaryKind` | `gossip-contracts/persistence` | Semantic domain tag for checkpoint boundaries |
 | `PersistenceInputError` | `gossip-contracts/persistence` | Input validation error enum |
 | `RECOMMENDED_MAX_BATCH_SIZE` | `gossip-contracts/persistence` | Batch size guidance (10,000) |
 | `run_conformance` | `gossip-contracts/persistence` | Conformance harness entry point (11 checks) |

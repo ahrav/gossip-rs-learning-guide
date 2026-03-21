@@ -1,10 +1,10 @@
 # The Orchestration Pipeline -- Runtime Architecture
 
-*An operator deploys a new scanner version. The first scan targets `/data/corpus`, a 2 TB filesystem with 4.7 million files. The operator launches the scan with `--workers=16` and `--max-items=256`. The runtime validates the path, discovers it exists and is a directory, canonicalizes it to `/data/corpus`, tags the source with `FILESYSTEM_CONNECTOR_TAG`, constructs a `ScanBudgets` with a checkpoint frequency of 256 items, loads the default rule set, builds the scanner engine, and dispatches the scan through the `ordered_content` module. The scan completes in 14 minutes with 12,847 findings. The next day, the operator runs the same scan but accidentally passes `--max-items=0`. The runtime rejects the configuration before dispatching: `ConnectorInputError::ZeroBudget { field: "max_items" }`. Zero items per checkpoint means zero progress -- the scan would run forever without advancing the cursor. A third operator on a different team passes `--max-bytes=0`. Same rejection. The budget validation catches configuration errors that would have silently produced an infinite-checkpoint loop or a zero-progress scan. Without early validation in the runtime, the error would surface inside the scan loop as undefined behavior -- or worse, not surface at all.*
+*An operator deploys a new scanner version. The first scan targets `/data/corpus`, a 2 TB filesystem with 4.7 million files. The operator launches the scan with `--workers=16` and `--max-items=256`. The runtime validates the path, discovers it exists and is a directory, canonicalizes it to `/data/corpus`, builds an `FsScanConfig` with the validated path and `ScanBudgets` set to 256 items, loads the default rule set, builds the scanner engine, and dispatches through the `ordered_content` module. The scan completes in 14 minutes with 12,847 findings. The next day, the operator runs the same scan but accidentally passes `--max-items=0`. The runtime rejects the configuration before dispatching: `ConnectorInputError::ZeroBudget { field: "max_items" }`. Zero items per checkpoint means zero progress -- the scan would run forever without advancing the cursor. A third operator on a different team passes `--max-bytes=0`. Same rejection. The budget validation catches configuration errors that would have silently produced an infinite-checkpoint loop or a zero-progress scan. Without early validation in the runtime, the error would surface deep in the dispatch as undefined behavior -- or worse, not surface at all.*
 
 ---
 
-The `gossip-scanner-runtime` crate is the orchestration layer. It sits above the source-family scan modules (`ordered_content` for filesystem, `git_repo` for Git) and below the binary entrypoints (the CLI scanner and the worker binary). Its job is to translate high-level configuration into validated paths, configured engines, and wired sinks, then dispatch through the appropriate source-family module. The runtime contains no scanning logic itself -- every substantive operation is delegated to the source-family modules and the engine. What the runtime adds is configuration validation, engine construction, sink wiring, and error wrapping.
+The `gossip-scanner-runtime` crate is the orchestration layer. It sits above the connector and scanner-engine crates and below the binary entrypoints (the CLI scanner and the worker binary). Its job is to translate high-level configuration into the precise types the scanning boundary expects: validated paths, configured engines, and wired sinks. The runtime contains no scanning logic itself — every substantive operation is delegated to the `ordered_content` or `git_repo` dispatch modules. What the runtime adds is configuration validation, engine caching, sink construction, and error wrapping.
 
 This chapter maps the end-to-end pipeline from configuration to scan completion, examining each stage in detail.
 
@@ -17,7 +17,7 @@ flowchart LR
     A[Config] --> B[Validate & Canonicalize]
     B --> C[Build Assignment]
     C --> D[Build Engine]
-    D --> E[Dispatch via source-family module]
+    D --> E[Runtime Dispatch]
     E --> F[AssignmentOutcome]
 ```
 
@@ -25,9 +25,9 @@ flowchart LR
 2. **Validate & Canonicalize**: The runtime checks that paths exist, resolves symlinks, and (for git) verifies that the path is a repository root.
 3. **Build Assignment**: The runtime constructs an `Assignment` with the validated path, connector kind, and default coordination metadata.
 4. **Build Engine**: The runtime loads rules, configures transforms, applies tuning, and constructs or retrieves the cached scanner engine.
-5. **Dispatch**: The runtime routes through the appropriate source-family module (`ordered_content` for filesystem, `git_repo` for Git) and executes the scan.
+5. **Runtime Dispatch**: The runtime selects the appropriate driver for the assignment and executes the scan.
 
-Each stage is a potential failure point, and each failure is reported through a structured error type. The runtime never lets a configuration error propagate to the scan dispatch level -- every validation happens at the top of the pipeline, before any resources are allocated or any scanning begins.
+Each stage is a potential failure point, and each failure is reported through a structured error type. The runtime never lets a configuration error propagate to the driver level -- every validation happens at the top of the pipeline, before any resources are allocated or any scanning begins.
 
 ## 2. ExecutionMode -- A Vestigial Flag
 
@@ -36,10 +36,8 @@ The runtime defines two execution modes, but both execute the same code path:
 ```rust
 /// How the runtime acquires source items.
 ///
-/// Both modes currently route through the same scan implementation.
-/// The distinction exists so worker and CLI entry points converge on a
-/// single runtime boundary, and so the `Connector` path can later add
-/// remote source enumeration without changing callers.
+/// In unified execution mode this flag is retained for CLI compatibility and
+/// telemetry only; both variants route through the same scan-driver path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExecutionMode {
     #[default]
@@ -48,7 +46,7 @@ pub enum ExecutionMode {
 }
 ```
 
-The doc comment is explicit: "both modes currently route through the same scan implementation." The `Direct` and `Connector` modes existed in an earlier architecture where the two paths had different execution models. The unification to a single scan path made the distinction obsolete, but the flag was retained for two reasons: backward compatibility with CLI interfaces that expose `--execution-mode`, and telemetry tagging so operators can see which mode was requested even though the execution is identical.
+The doc comment is explicit: "both variants route through the same scan-driver path." The `Direct` and `Connector` modes existed in an earlier architecture where the two paths had different execution models. The unification to a single scan-driver seam made the distinction obsolete, but the flag was retained for two reasons: backward compatibility with CLI interfaces that expose `--execution-mode`, and telemetry tagging so operators can see which mode was requested even though the execution is identical.
 
 The top-level filesystem dispatcher makes the equivalence visible:
 
@@ -100,7 +98,7 @@ The `.trim()` call handles whitespace-padded input from configuration files. The
 
 ## 3. ScanBudgets -- Budget Validation
 
-Scan budgets control checkpoint frequency and byte limits. These are the operational knobs that the runtime enforces before any scan is dispatched:
+Scan budgets control checkpoint frequency and byte limits. These are the operational knobs that the runtime enforces before any driver is constructed:
 
 ```rust
 /// Runtime budgets for source scans.
@@ -122,15 +120,15 @@ impl Default for ScanBudgets {
 }
 ```
 
-**`max_items: usize`.** The checkpoint frequency in items. After processing this many items, the orchestration layer can persist a cursor update to the coordinator. The default is 256 items -- frequent enough to provide reasonable resumption granularity (losing at most 256 items of work on crash), but infrequent enough to avoid checkpoint overhead dominating scan time.
+**`max_items: usize`.** The checkpoint frequency in items. After processing this many items, the orchestration layer can query `checkpoint_hint()` and persist a cursor update to the coordinator. The default is 256 items -- frequent enough to provide reasonable resumption granularity (losing at most 256 items of work on crash), but infrequent enough to avoid checkpoint overhead dominating scan time. The `ScanBudgets::validate()` method enforces that this value is non-zero before any scan dispatch begins.
 
-**`max_bytes: u64`.** A runtime-level byte budget knob. The default is 1,000,000 bytes (approximately 1 MB). This provides a safeguard against runaway scans that process unexpectedly large items without checkpointing. The exact semantics depend on how the scan loop uses the value, but the runtime enforces that it is non-zero.
+**`max_bytes: u64`.** A runtime-level byte budget knob. The default is 1,000,000 bytes (approximately 1 MB). This provides a safeguard against runaway scans that process unexpectedly large items without checkpointing. The exact semantics depend on how the driver uses the value, but the runtime enforces that it is non-zero.
 
-The budget validation enforces both values:
+The budget validation rejects zero values for both fields:
 
 ```rust
 impl ScanBudgets {
-    pub(crate) fn validate(self) -> Result<(), ScanRuntimeError> {
+    fn validate(&self) -> Result<(), ScanRuntimeError> {
         if self.max_items == 0 {
             return Err(ScanRuntimeError::ConnectorInput(
                 ConnectorInputError::ZeroBudget { field: "max_items" },
@@ -146,7 +144,7 @@ impl ScanBudgets {
 }
 ```
 
-The validation occurs before any scan is dispatched, following the fail-fast principle: configuration errors are caught at the top of the pipeline, not deep inside the scan loop where the error context is lost. The `ConnectorInputError::ZeroBudget` variant carries the field name (`"max_items"` or `"max_bytes"`), making the error message unambiguous.
+The validation occurs before any assignment is built or scan is dispatched, following the fail-fast principle: configuration errors are caught at the top of the pipeline, not deep inside the dispatch where the error context is lost. The `ConnectorInputError::ZeroBudget` variant carries the field name (`"max_items"` or `"max_bytes"`), making the error message unambiguous.
 
 ## 4. FsScanConfig -- Filesystem Configuration
 
@@ -185,13 +183,13 @@ Each field maps to a specific runtime decision:
 
 **`path: PathBuf`** is the scan target. The runtime validates and canonicalizes it before use. It may be a directory (the walker enumerates all files recursively) or a single file (the scanner processes one item).
 
-**`workers: usize`** defaults to the number of available CPUs via `std::thread::available_parallelism()`. The builder method `with_workers` clamps the value to at least 1. This parallelism is used by the scan loop to spawn worker threads for concurrent file processing.
+**`workers: usize`** defaults to the number of available CPUs via `std::thread::available_parallelism()`. The builder method `with_workers` clamps the value to at least 1. This parallelism is used by the driver to spawn worker threads for concurrent file processing.
 
 **`decode_depth: Option<usize>`** overrides the engine's maximum transform nesting depth. A `None` uses the engine default (3 levels). A `Some(1)` limits decoding to a single layer. Base64-inside-URL-encoding-inside-Base64 chains are bounded by this value to prevent exponential decode blowup on adversarial inputs.
 
-**`skip_archives: bool` and `scan_binary: bool`** control content filtering. The defaults scan archives (they may contain secrets in compressed config files) but skip binary files (they produce a high rate of false positives). These map directly to the `FilesystemExecutionConfig` fields in the ordered-content scan path.
+**`skip_archives: bool` and `scan_binary: bool`** control content filtering. The defaults scan archives (they may contain secrets in compressed config files) but skip binary files (they produce a high rate of false positives). These map directly to the `FilesystemExecutionConfig` fields in the scan-driver boundary.
 
-**`persist_findings: bool`** enables the commit sink bridge. In CLI mode, this is `false` -- findings go through the event output only. In distributed mode, the `DurableCommitSink` needs this set to `true` so the scan loop calls `begin_item`, `upsert_findings`, and `finish_item`.
+**`persist_findings: bool`** enables the commit sink bridge. In CLI mode, this is `false` -- findings go through the event output only. In distributed mode, the `ReceiptCommitSink` needs this set to `true` so the driver calls `begin_item`, `upsert_findings`, and `finish_item`.
 
 **`anchor_mode: AnchorMode`** selects the anchor extraction policy. The `AnchorMode` enum has two variants:
 
@@ -393,7 +391,7 @@ The function uses `git rev-parse --show-toplevel` to find the actual repository 
 The runtime defines a structured error enum that captures context for every failure mode:
 
 ```rust
-/// Runtime wiring errors for scan execution.
+/// Runtime wiring errors for unified scan execution.
 #[derive(Debug)]
 pub enum ScanRuntimeError {
     InvalidPath {
@@ -401,6 +399,7 @@ pub enum ScanRuntimeError {
         path: PathBuf,
         message: String,
     },
+    UnsupportedConnectorKind(ConnectorKind),
     GitCommandFailed {
         repo: PathBuf,
         status_code: Option<i32>,
@@ -420,9 +419,11 @@ pub enum ScanRuntimeError {
 }
 ```
 
-Five structured variants plus one escape hatch:
+Six structured variants plus one escape hatch:
 
 **`InvalidPath`** includes the source kind (`"filesystem"` or `"git"`), the offending path, and a human-readable message. An operator seeing this error knows immediately which path failed and why.
+
+**`UnsupportedConnectorKind`** reports attempts to use the `InMemory` connector in the production runtime. The variant carries the `ConnectorKind` value for diagnostic display.
 
 **`GitCommandFailed`** includes the repo path, the git exit code (`Option<i32>` because the process may be killed by a signal), and the stderr output. This is the information an operator needs to diagnose git infrastructure problems.
 
@@ -432,7 +433,7 @@ Five structured variants plus one escape hatch:
 
 **`ConnectorInput`** wraps `ConnectorInputError` (from `gossip-contracts`), which includes the `ZeroBudget` variant used by budget validation.
 
-**`Driver`** wraps `anyhow::Error` as the escape hatch for scan execution errors that do not fit the structured categories.
+**`Driver`** wraps `anyhow::Error` as the escape hatch for driver-internal errors that do not fit the structured categories.
 
 ## 8. The Complete Wiring
 
@@ -450,7 +451,7 @@ pub(crate) fn scan_fs_with_runtime(
 }
 ```
 
-This function is the internal dispatch point for filesystem scans. It validates the path, then delegates to the `ordered_content` module. The git equivalent, `scan_git_with_runtime`, validates the repository path and delegates to `git_repo::scan_local_repo`. CLI scans, distributed worker scans, and test harness scans all flow through these functions. The parameters differ (different sinks, different configs), but the dispatch pattern is identical: validate, then delegate to the source-family module.
+This function is the internal dispatch point for filesystem scan execution in the runtime. CLI scans, distributed worker scans, and test harness scans all flow through `scan_fs_with_runtime` (or `scan_git_with_runtime` for git). The parameters differ (different sinks, different configs), but the dispatch pattern is identical: validate the path, then delegate to the appropriate module (`ordered_content` for filesystem, `git_repo` for git).
 
 ## 9. Additional Modules
 

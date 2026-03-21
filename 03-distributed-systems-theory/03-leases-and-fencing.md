@@ -272,9 +272,7 @@ The backend must support:
 - **Persistent storage**: Tokens must survive backend restarts
 - **Low latency**: Every mutation requires a token check; slow backends degrade throughput
 
-Gossip-rs currently provides an `InMemoryCoordinator` reference backend. The trait-based `CoordinationBackend` abstraction is designed so that production backends can be added without changing coordination logic. Candidate backends include:
-- **etcd**: Would use atomic transactions (`Txn`) for token validation
-- **PostgreSQL**: Would use `SELECT FOR UPDATE` + token check in a transaction
+Gossip-rs provides two coordination backends. The `InMemoryCoordinator` is the reference implementation used for development and simulation testing. The `gossip-coordination-etcd` crate provides the `EtcdCoordinator` production backend, which implements `CoordinationBackend`, `RunManagement`, and `ShardClaiming` directly against etcd using atomic CAS transactions (`Txn`) for token validation. The crate also exposes `AsyncEtcdCoordinator` (async core) and `SimEtcdCoordinator` (deterministic test backend). Additional production backends (e.g., PostgreSQL with `SELECT FOR UPDATE` + token check) can be added without changing coordination logic.
 
 ### 2. Coordinator Scalability
 The coordinator is a potential bottleneck: all lease grants go through it. Mitigations:

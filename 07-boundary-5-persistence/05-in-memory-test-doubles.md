@@ -634,17 +634,17 @@ pub(crate) fn wait(self) -> Result<B::Receipt, InMemoryPersistenceError> {
 
 The `wait` method takes `self` by value -- a handle can only be consumed once. The loop re-acquires the mutex after each condvar wake and checks whether this specific operation has transitioned to `Finished`. The `Finished` result is extracted via `take()`, consuming the `Option`. The operation entry is then removed from the `ops` map to prevent unbounded growth. A second wait on the same operation (impossible at the type level since `wait` consumes `self`) would see `None` and return `UnknownOperation`.
 
-## NoOpCommitSink
+## CliNoOpCommitSink
 
-Not all test scenarios require full persistence semantics. The `CommitSink` trait defines a per-item lifecycle (begin, upsert findings, finish), and `NoOpCommitSink` is its zero-cost test double:
+Not all test scenarios require full persistence semantics. The `CommitSink` trait defines a per-item lifecycle (begin, upsert findings, finish), and `CliNoOpCommitSink` is its zero-cost test double:
 
 ```rust
 // From crates/gossip-scanner-runtime/src/commit_sink.rs
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoOpCommitSink;
+pub struct CliNoOpCommitSink;
 
-impl CommitSink for NoOpCommitSink {
+impl CommitSink for CliNoOpCommitSink {
     fn begin_item(&self, _item_key: &ItemKey, _meta: &ItemMeta) -> Result<()> {
         Ok(())
     }
@@ -659,7 +659,7 @@ impl CommitSink for NoOpCommitSink {
 }
 ```
 
-`NoOpCommitSink` is zero-sized, `Copy`-able, and available in all builds -- not behind a feature gate. It serves both tests that do not need persistence verification and CLI-mode production scanning where findings flow through `EventOutput` instead.
+`CliNoOpCommitSink` is zero-sized, `Copy`-able, and available in all builds -- not behind a feature gate. It serves both tests that do not need persistence verification and CLI-mode production scanning where findings flow through `EventOutput` instead.
 
 ## Error Taxonomy
 
@@ -731,7 +731,7 @@ In auto-complete mode (the default), writes apply immediately during `batch_upse
 | `InMemoryFindingsSink` | Reference findings sink with referential integrity |
 | `PendingWriteId` | Opaque handle to a specific pending write |
 | `CompletionOrder` | FIFO or LIFO drain direction for release methods |
-| `NoOpCommitSink` | Zero-sized `CommitSink` double for tests and CLI mode |
+| `CliNoOpCommitSink` | Zero-sized `CommitSink` double for tests and CLI mode |
 | `InMemoryPersistenceError` | Ten-variant error enum covering faults, infrastructure, and data integrity |
 
 The in-memory backends are not simplifications of the persistence contract. They are the contract, enforced with the same invariants that production backends must satisfy. Tests that pass against `InMemoryDoneLedger` and `InMemoryFindingsSink` exercise the same lattice merge, referential integrity, and two-phase commit protocol that a PostgreSQL or SQLite backend must implement. The conformance harness, covered in the next chapter, makes this equivalence formally verifiable.

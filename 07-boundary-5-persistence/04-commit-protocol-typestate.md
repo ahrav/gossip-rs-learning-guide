@@ -12,9 +12,10 @@ Gossip-rs encodes this ordering constraint at the type level. The `PageCommit<S>
 
 ## CommitScope: Identifying a Page's Commit Work
 
-Every page commit is scoped to exactly one combination of tenant, policy, run, shard, fence epoch, unit count, and checkpoint boundary. The `CommitScope` struct freezes these values at construction time and serves as the reference identity for every subsequent validation check:
+Every page commit is scoped to exactly one combination of tenant, run, shard, fence epoch, item count, and cursor boundary. The `CommitScope` struct freezes these values at construction time and serves as the reference identity for every subsequent validation check:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:89-97
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitScope {
     tenant_id: TenantId,
@@ -34,14 +35,15 @@ Seven fields, each serving a distinct purpose:
 - **`run_id`** — Identifies the scan run that produced the page. Prevents stale receipts from a previous run from being mistakenly applied to a new one.
 - **`shard_id`** — The shard that emitted the page. In a sharded system, concurrent pages from different shards must not cross-contaminate.
 - **`fence_epoch`** — The coordination fence epoch under which processing occurred. If the epoch has advanced (because another worker took over the shard), receipts from the old epoch are invalid.
-- **`committed_units`** — The number of units the page represents, as a `NonZeroU64` (a page with zero committed units is meaningless). This is the cross-step invariant: the done-ledger receipt must confirm exactly this many records.
-- **`checkpoint_boundary`** — A family-neutral durable checkpoint boundary (see `CheckpointBoundary` below). This is the "destination" — the frontier position the shard cursor will advance to once all three stages are confirmed. The boundary carries a semantic tag distinguishing ordered-content from repo-frontier checkpoints, preventing accidental cross-family mix-ups.
+- **`committed_units: NonZeroU64`** — The number of units the page represents. This is the cross-step invariant: the done-ledger receipt must confirm exactly this many records. `NonZeroU64` enforces that a commit scope always represents at least one unit of work.
+- **`checkpoint_boundary: CheckpointBoundary`** — The checkpoint boundary the commit must durably acknowledge. This is the "destination" — the position the shard will advance to once all three stages are confirmed.
 
 Once constructed, the scope is immutable. Every receipt-validation check compares against these frozen values. If the scope could be mutated mid-protocol, the typestate guarantees would be meaningless.
 
-A convenience constructor `from_write_context` extracts tenant, policy, run, shard, and fence epoch from a shared `WriteContext`, so callers only supply the commit-specific fields:
+The constructor and accessors are straightforward:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:99-161
 impl CommitScope {
     #[must_use]
     pub fn new(
@@ -64,13 +66,6 @@ impl CommitScope {
         }
     }
 
-    #[must_use]
-    pub fn from_write_context(
-        wc: WriteContext,
-        committed_units: NonZeroU64,
-        checkpoint_boundary: CheckpointBoundary,
-    ) -> Self { /* extracts routing fields from wc */ }
-
     pub const fn tenant_id(&self) -> TenantId { self.tenant_id }
     pub const fn policy_hash(&self) -> PolicyHash { self.policy_hash }
     pub const fn run_id(&self) -> RunId { self.run_id }
@@ -78,37 +73,10 @@ impl CommitScope {
     pub const fn fence_epoch(&self) -> FenceEpoch { self.fence_epoch }
     pub const fn committed_units(&self) -> NonZeroU64 { self.committed_units }
     pub fn checkpoint_boundary(&self) -> &CheckpointBoundary { &self.checkpoint_boundary }
-    pub fn checkpoint_boundary_kind(&self) -> CheckpointBoundaryKind { self.checkpoint_boundary.kind() }
-    pub fn checkpoint_cursor(&self) -> &Cursor { self.checkpoint_boundary.cursor() }
-    pub const fn write_context(&self) -> WriteContext { /* reconstructs from routing fields */ }
 }
 ```
 
-All accessors are `const fn` where possible and `#[must_use]` — the compiler warns if a caller retrieves a scope field and discards the result. The `checkpoint_boundary` accessor returns a reference because `CheckpointBoundary` is not `Copy` (it wraps a `Cursor` containing variable-length key data). The `checkpoint_cursor` convenience method delegates to `checkpoint_boundary.cursor()` for callers that only need the underlying frontier position.
-
-### CheckpointBoundary and CheckpointBoundaryKind
-
-The `checkpoint_boundary` field uses a tagged enum that carries semantic domain information:
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum CheckpointBoundaryKind {
-    /// Ordered-content item frontier.
-    OrderedContent,
-    /// Repo-frontier progress.
-    RepoFrontier,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CheckpointBoundary {
-    /// Ordered-content checkpoint boundary.
-    OrderedContent(Cursor),
-    /// Repo-frontier checkpoint boundary.
-    RepoFrontier(Cursor),
-}
-```
-
-Both source families (ordered-content and repo-frontier) reduce to a monotonic frontier position plus optional opaque token at the persistence boundary, but the enum tag keeps the semantic domain explicit. Runtime code cannot accidentally mix an ordered-content frontier with a repo-frontier position — the tag is checked in full-scope equality comparisons during checkpoint receipt validation.
+All accessors are `const fn` where possible and `#[must_use]` — the compiler warns if a caller retrieves a scope field and discards the result. The `checkpoint_boundary` accessor returns a reference because `Cursor` is not `Copy` (it contains variable-length key data).
 
 ## The Four Typestate Markers
 
@@ -117,6 +85,7 @@ The `PageCommit<S>` machine moves through four states, each represented by a zer
 ### AwaitingFindings: The Entry Point
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:231-232
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AwaitingFindings;
 ```
@@ -126,6 +95,7 @@ The initial state. No durable acknowledgement exists yet. The only available tra
 ### FindingsDurable: Findings Confirmed
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:238-241
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FindingsDurable {
     findings: FindingsCommitReceipt,
@@ -137,6 +107,7 @@ Findings have been durably written. The marker carries the `FindingsCommitReceip
 ### ItemDurable: Findings and Done-Ledger Confirmed
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:249-252
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemDurable {
     item_commit: ItemCommitReceipt,
@@ -148,6 +119,7 @@ Both findings and done-ledger rows are durable. The marker carries the composite
 ### CheckpointDurable: Terminal State
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:258-261
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckpointDurable {
     page_commit: PageCommitReceipt,
@@ -171,6 +143,7 @@ Given that incorrect ordering is a data-loss bug — the ghost cursor scenario f
 The core struct is generic over the state parameter:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:332-337
 #[must_use = "page commits must be driven to a durable receipt or explicitly dropped"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageCommit<S> {
@@ -184,6 +157,7 @@ The `scope` field uses `Arc<CommitScope>` because the scope is shared across all
 A shared accessor is available in every state:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:339-346
 impl<S> PageCommit<S> {
     #[inline]
     #[must_use]
@@ -198,6 +172,7 @@ impl<S> PageCommit<S> {
 Construction starts the protocol:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:348-356
 impl PageCommit<AwaitingFindings> {
     #[inline]
     pub fn new(scope: CommitScope) -> Self {
@@ -211,6 +186,7 @@ impl PageCommit<AwaitingFindings> {
 The `record_findings` method accepts a receipt the caller already holds:
 
 ```rust
+    // From crates/gossip-contracts/src/persistence/page_commit.rs:365-369
     #[inline]
     pub fn record_findings(self, receipt: FindingsCommitReceipt) -> PageCommit<FindingsDurable> {
         PageCommit {
@@ -223,6 +199,7 @@ The `record_findings` method accepts a receipt the caller already holds:
 The `wait_findings` method accepts a `CommitHandle` and blocks until the receipt is available:
 
 ```rust
+    // From crates/gossip-contracts/src/persistence/page_commit.rs:377-383
     pub fn wait_findings<H>(self, handle: H) -> Result<PageCommit<FindingsDurable>, H::Error>
     where
         H: CommitHandle<Receipt = FindingsCommitReceipt>,
@@ -238,14 +215,15 @@ No validation is performed on the findings receipt. The findings sink is driven 
 ### Transition 2: FindingsDurable → ItemDurable
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:401-416
     pub fn record_done_ledger(
         self,
         receipt: DoneLedgerCommitReceipt,
     ) -> Result<PageCommit<ItemDurable>, PageCommitValidationError> {
-        let expected = self.scope.committed_units().get();
+        let expected = self.scope.committed_units();
         let actual = receipt.record_count();
         if expected != actual {
-            return Err(PageCommitValidationError::LedgerUnitCountMismatch { expected, actual });
+            return Err(PageCommitValidationError::LedgerItemCountMismatch { expected, actual });
         }
 
         let item_commit = ItemCommitReceipt::new(self.scope.clone(), self.state.findings, receipt);
@@ -263,6 +241,7 @@ On success, the method assembles an `ItemCommitReceipt` — a composite proof th
 The corresponding `wait_done_ledger` combines the handle wait with validation:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:424-434
     pub fn wait_done_ledger<H>(
         self,
         handle: H,
@@ -279,15 +258,13 @@ The corresponding `wait_done_ledger` combines the handle wait with validation:
 ### Transition 3: ItemDurable → CheckpointDurable
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:462-475
     pub fn record_checkpoint(
         self,
         receipt: CheckpointCommitReceipt,
     ) -> Result<PageCommit<CheckpointDurable>, PageCommitValidationError> {
         if receipt.scope() != self.scope() {
-            return Err(PageCommitValidationError::CheckpointScopeMismatch {
-                expected: Box::new(self.scope().clone()),
-                actual: Box::new(receipt.scope().clone()),
-            });
+            return Err(PageCommitValidationError::CheckpointScopeMismatch);
         }
 
         let page_commit = PageCommitReceipt::new(self.state.item_commit, receipt);
@@ -298,13 +275,14 @@ The corresponding `wait_done_ledger` combines the handle wait with validation:
     }
 ```
 
-The checkpoint transition performs the strictest validation: the receipt's embedded `CommitScope` must match this page's scope in every field — tenant, policy, run, shard, fence epoch, unit count, and checkpoint boundary. This is the "full scope equality" check. Checkpoint receipts go through a backend round-trip (potentially across a network boundary to a coordination store), where receipt mix-ups between concurrent pages are most likely. The single equality check on the embedded scope catches all of them. The error variant carries both the expected and actual scopes (boxed to avoid bloating the error type) so operators can diagnose which field differs.
+The checkpoint transition performs the strictest validation: the receipt's embedded `CommitScope` must match this page's scope in every field — tenant, run, shard, fence epoch, item count, and cursor. This is the "full scope equality" check. Checkpoint receipts go through a backend round-trip (potentially across a network boundary to a coordination store), where receipt mix-ups between concurrent pages are most likely. The single equality check on the embedded scope catches all of them.
 
 On success, the method assembles the terminal `PageCommitReceipt` — proof that all three stages are durable.
 
 The `wait_checkpoint` follows the same pattern:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:482-492
     pub fn wait_checkpoint<H>(
         self,
         handle: H,
@@ -323,6 +301,7 @@ The `wait_checkpoint` follows the same pattern:
 Once in the `CheckpointDurable` state, the caller extracts the final proof:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:495-509
 impl PageCommit<CheckpointDurable> {
     #[inline]
     #[must_use]
@@ -357,29 +336,28 @@ Callers that need finer retry control use `record_X` methods with a separately m
 ### PageCommitValidationError
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:169-175
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageCommitValidationError {
-    LedgerUnitCountMismatch { expected: u64, actual: u64 },
-    CheckpointScopeMismatch {
-        expected: Box<CommitScope>,
-        actual: Box<CommitScope>,
-    },
+    LedgerItemCountMismatch { expected: u64, actual: u64 },
+    CheckpointScopeMismatch,
 }
 ```
 
 Two variants, each guarding a different invariant:
 
-- **`LedgerUnitCountMismatch`** — The done-ledger receipt acknowledged a different number of records than the scope's `committed_units`. This catches partial flushes (the backend wrote 120 of 128 rows before confirming) and receipt mix-ups (a receipt from a 64-item page applied to a 128-item page).
+- **`LedgerItemCountMismatch`** — The done-ledger receipt acknowledged a different number of records than the scope's `committed_units`. This catches partial flushes (the backend wrote 120 of 128 rows before confirming) and receipt mix-ups (a receipt from a 64-item page applied to a 128-item page).
 
-- **`CheckpointScopeMismatch`** — The checkpoint receipt's embedded scope does not match the page scope on at least one field. The error carries both scopes (boxed to avoid bloating the error type) so operators can inspect exactly which field differs. This catches every category of cross-page confusion: wrong tenant, wrong policy, wrong shard, wrong epoch, wrong cursor boundary, or wrong boundary family.
+- **`CheckpointScopeMismatch`** — The checkpoint receipt's embedded scope does not match the page scope on at least one field. This catches every category of cross-page confusion: wrong tenant, wrong shard, wrong epoch, wrong cursor boundary.
 
 Both are deterministic — retrying with the same inputs produces the same error. These indicate programming errors or backend mis-routing bugs, not transient failures.
 
-An important asymmetry exists in validation depth. The findings stage performs *no* validation because the findings receipt carries only aggregate counts — it cannot identify which page it belongs to. The done-ledger stage performs *partial* validation (unit count only), because the done-ledger receipt also lacks full scope identity but does carry a record count that must be consistent. The checkpoint stage performs *full* validation (all seven scope fields), because the checkpoint receipt embeds a complete `CommitScope` after traversing a backend round-trip where cross-page confusion is most likely. This graduated validation strategy avoids redundant checks at stages where the data physically cannot be misrouted, while applying maximum scrutiny at the stage with the highest risk.
+An important asymmetry exists in validation depth. The findings stage performs *no* validation because the findings receipt carries only aggregate counts — it cannot identify which page it belongs to. The done-ledger stage performs *partial* validation (item count only), because the done-ledger receipt also lacks full scope identity but does carry a record count that must be consistent. The checkpoint stage performs *full* validation (all seven scope fields), because the checkpoint receipt embeds a complete `CommitScope` after traversing a backend round-trip where cross-page confusion is most likely. This graduated validation strategy avoids redundant checks at stages where the data physically cannot be misrouted, while applying maximum scrutiny at the stage with the highest risk.
 
 ### CommitAdvanceError\<E\>
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:198-204
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitAdvanceError<E> {
     Wait(E),
@@ -392,6 +370,7 @@ The `wait_X` methods return this composite error. The type parameter `E` is the 
 The `Display` and `Error` implementations preserve the source chain for both variants:
 
 ```rust
+// From crates/gossip-contracts/src/persistence/page_commit.rs:218-228
 impl<E> Error for CommitAdvanceError<E>
 where
     E: Error + Send + Sync + 'static,
@@ -414,6 +393,7 @@ The typestate machine does not directly interact with any persistence backend. I
 ### CommitReceipt: Proof of Durability
 
 ```rust
+// From crates/gossip-contracts/src/persistence/commit.rs:52
 pub trait CommitReceipt: Clone + fmt::Debug + Send + Sync + 'static {}
 ```
 
@@ -422,6 +402,7 @@ A marker trait with supertrait bounds ensuring receipts can be cloned into compo
 ### CommitHandle: Deferred Durability
 
 ```rust
+// From crates/gossip-contracts/src/persistence/commit.rs:63-76
 #[must_use = "durability is not established until wait() returns a receipt"]
 pub trait CommitHandle: Send + 'static {
     type Receipt: CommitReceipt;
@@ -436,6 +417,7 @@ A `CommitHandle` represents the backend's acceptance of a write — but acceptan
 ### ReadyCommitHandle: The Synchronous Adapter
 
 ```rust
+// From crates/gossip-contracts/src/persistence/commit.rs:84-120
 #[must_use = "the contained result must be observed via wait()"]
 #[derive(Debug)]
 pub struct ReadyCommitHandle<R, E>(Result<R, E>);
@@ -549,7 +531,7 @@ The codebase contains two commit-related abstractions that operate at different 
 **`CommitSink`** is the per-item interface used by scan drivers. It exposes three methods — `begin_item`, `upsert_findings`, `finish_item` — that the driver calls for each scanned item within a page:
 
 ```rust
-// From crates/gossip-scanner-runtime/src/commit_sink.rs
+// From crates/gossip-scanner-runtime/src/commit_sink.rs:418-430
 pub trait CommitSink: Send + Sync {
     fn begin_item(&self, item_key: &ItemKey, meta: &ItemMeta) -> Result<()>;
     fn upsert_findings(&self, item_key: &ItemKey, batch: &FindingsBatch) -> Result<()>;
@@ -588,13 +570,13 @@ The inner `CommitSink` loop handles individual items. The outer `PageCommit` mac
 
 | Concept | Role |
 |---------|------|
-| `CommitScope` | Frozen identity for one page commit: tenant, policy, run, shard, epoch, unit count, checkpoint boundary |
+| `CommitScope` | Frozen identity for one page commit: tenant, policy, run, shard, epoch, committed units, checkpoint boundary |
 | `AwaitingFindings` | Entry state — no durability confirmed |
 | `FindingsDurable` | Findings confirmed durable; carries `FindingsCommitReceipt` |
 | `ItemDurable` | Findings + done-ledger confirmed; carries composite `ItemCommitReceipt` |
 | `CheckpointDurable` | Terminal state; carries `PageCommitReceipt` proving full page durability |
 | `record_X` / `wait_X` | Dual transition methods: pre-resolved receipt vs. deferred `CommitHandle` |
-| `PageCommitValidationError` | Cross-step invariant violations: unit count mismatch, scope mismatch |
+| `PageCommitValidationError` | Cross-step invariant violations: item count mismatch, scope mismatch |
 | `CommitAdvanceError<E>` | Composite error for `wait_X`: transient backend failure or deterministic validation failure |
 | `CommitHandle` / `CommitReceipt` | Backend-neutral abstraction for deferred durability acknowledgement |
 | `ReadyCommitHandle` | Pre-resolved adapter for synchronous backends and test doubles |
@@ -603,4 +585,4 @@ The typestate machine transforms a protocol that could fail silently at runtime 
 
 ## What's Next
 
-Chapter 5 examines the in-memory persistence backends that implement the `CommitHandle` and `CommitReceipt` traits. These test doubles — including `ReadyCommitHandle` and `NoOpCommitSink` — make it possible to drive the entire `PageCommit` typestate machine through all four states in unit tests without any disk I/O, verifying the ordering invariants and validation logic in isolation from real storage backends. That chapter also covers how `NoOpCommitSink` serves as the `CommitSink` implementation for CLI-mode scans, where per-item persistence is unnecessary and the three-method lifecycle degenerates into no-ops.
+Chapter 5 examines the in-memory persistence backends that implement the `CommitHandle` and `CommitReceipt` traits. These test doubles — including `ReadyCommitHandle` and `CliNoOpCommitSink` — make it possible to drive the entire `PageCommit` typestate machine through all four states in unit tests without any disk I/O, verifying the ordering invariants and validation logic in isolation from real storage backends. That chapter also covers how `CliNoOpCommitSink` serves as the `CommitSink` implementation for CLI-mode scans, where per-item persistence is unnecessary and the three-method lifecycle degenerates into no-ops.

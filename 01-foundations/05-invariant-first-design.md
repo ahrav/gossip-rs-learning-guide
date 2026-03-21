@@ -167,7 +167,7 @@ This matrix ensures **no invariant is untested** and **no test is redundant**.
 
 ### Gossip-rs B1 Invariant Summary
 
-Gossip-rs B1 (Identity) has **37 tested invariants** across 11 source files:
+Gossip-rs B1 (Identity) has approximately **37 tested invariants** across its source files (these counts are approximate and shift as the codebase evolves):
 
 | Source File | Invariants | Test Types |
 |------------|-----------|-----------|
@@ -183,7 +183,7 @@ Gossip-rs B1 (Identity) has **37 tested invariants** across 11 source files:
 | `policy.rs` | 3 | Unit, Golden |
 | `mod.rs` | 3 | Unit |
 
-**Total**: 37 invariants, 168 test cases.
+These counts are approximate snapshots; the exact numbers grow as the identity module evolves.
 
 ## Property-Based Testing with Proptest
 
@@ -345,7 +345,7 @@ fn golden_vectors_for_domain_constants() {
     assert_eq!(SECRET_HASH_V1, "gossip/secret-hash/v1");
     assert_eq!(ITEM_ID_V1, "gossip/item-id/v1");
     assert_eq!(SPLIT_ID_V1, "gossip/coord/v1/split-id");
-    // ... (15 total)
+    // ... (16 total)
 }
 ```
 
@@ -358,19 +358,19 @@ Some invariants can be enforced at compile time using Rust's type system and con
 ### Example: Domain Constant Count
 
 ```rust
-pub const ALL: [&str; 15] = [
+pub const ALL: [&str; 16] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
-    // ... (15 total)
+    // ... (16 total)
 ];
 ```
 
-If you add a 16th domain constant but forget to add it to the array, **compilation fails**:
+If you add a 17th domain constant but forget to add it to the array, **compilation fails**:
 
 ```
 error: mismatched types
-  expected array `[&str; 15]`
-  found array `[&str; 16]`
+  expected array `[&str; 16]`
+  found array `[&str; 17]`
 ```
 
 No runtime check needed - the compiler enforces the invariant.
@@ -388,7 +388,7 @@ The invariant "must write before committing" is enforced by the type system.
 
 ## Invariant Test Matrix Summary
 
-Here's a summary of Gossip-rs B1's 37 invariants:
+Here's a summary of Gossip-rs B1's invariants (approximate counts; these grow as the codebase evolves):
 
 ### Identity Derivation (20 invariants)
 
@@ -426,7 +426,7 @@ Here's a summary of Gossip-rs B1's 37 invariants:
 | Exact byte output | Unit (golden) | FindingId, SecretHash, RuleFingerprint, PolicyHash, hashing |
 | Domain string stability | Unit (golden) | `domain.rs` |
 
-**Total**: 37 invariants across 11 files.
+These counts are approximate and evolve with the codebase.
 
 ## Lamport: Proving Correctness
 
@@ -442,7 +442,7 @@ Gossip-rs follows this methodology:
 1. **Specify**: Document invariants in code comments and this guide
 2. **Prove initialization**: Test constructors establish invariants
 3. **Prove preservation**: Test every mutation preserves invariants
-4. **Conclude correctness**: 168 test cases verify 37 invariants
+4. **Conclude correctness**: Comprehensive test cases verify all documented invariants
 
 This is **lightweight formal verification**: we don't use a proof assistant, but we use the same reasoning principles.
 
@@ -454,7 +454,7 @@ This is **lightweight formal verification**: we don't use a proof assistant, but
 4. **Property-based testing** (proptest) tests universal properties across the input space
 5. **Golden vectors** pin exact byte outputs as regression tests
 6. **Compile-time invariants** use Rust's type system to prevent violations at compile time
-7. **Gossip-rs B1 has 37 invariants** tested by 168 test cases across 11 source files
+7. **Gossip-rs B1 has ~37 invariants** tested comprehensively across its source files (counts are approximate and grow with the codebase)
 8. **Lamport's methodology** guides formal reasoning about correctness
 
 ## References

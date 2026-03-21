@@ -201,6 +201,10 @@ run should transition to a terminal state:
 
 ```rust
 pub fn evaluate_run_terminal(progress: &RunProgress) -> RunTerminalEvaluation {
+    assert!(
+        progress.total > 0,
+        "evaluate_run_terminal called with zero-total progress"
+    );
     if progress.active > 0 {
         RunTerminalEvaluation::StillActive
     } else if progress.parked > 0 {
@@ -211,9 +215,12 @@ pub fn evaluate_run_terminal(progress: &RunProgress) -> RunTerminalEvaluation {
 }
 ```
 
-The logic is simple: if any shard is still Active, the run cannot terminate.
-If all shards are settled but some are Parked, the run has partial failures.
-Otherwise, everything completed successfully.
+The function panics if `progress.total == 0` -- a run with no shards should
+never exist in `Active` state, so a zero-total progress value indicates a
+logic bug in the caller. Beyond that guard, the logic is simple: if any shard
+is still Active, the run cannot terminate. If all shards are settled but some
+are Parked, the run has partial failures. Otherwise, everything completed
+successfully.
 
 This evaluation is intentionally **external** to `RunRecord`. The coordinator
 calls it but decides independently whether and when to auto-transition. This
@@ -500,8 +507,8 @@ pub fn default_claim_next_available<'a, B: CoordinationBackend + RunManagement>(
             Err(AcquireError::TenantMismatch { expected }) => {
                 return Err(ClaimError::TenantMismatch { expected });
             }
-            Err(AcquireError::BackendError(infra)) => {
-                return Err(ClaimError::BackendError(infra));
+            Err(AcquireError::BackendError(err)) => {
+                return Err(ClaimError::BackendError(err));
             }
         }
     };
@@ -596,10 +603,9 @@ Each candidate might fail for different reasons:
   Track it and continue, but `debug_assert` to catch it in tests.
 - **`TenantMismatch`** -- This is not a race; it is a logic bug. Fail
   immediately because retrying other candidates would hit the same mismatch.
-- **`BackendError(infra)`** -- An infrastructure error from the coordination
-  backend, wrapped in an `InfraError` that classifies it as either `Transient`
-  (retryable) or `Corruption` (permanent). Fail immediately because retrying
-  other candidates is unlikely to succeed if the backend itself is unhealthy.
+- **`BackendError`** -- An infrastructure error from the coordination
+  backend (wrapped as `InfraError`). Fail immediately because retrying other
+  candidates is unlikely to succeed if the backend itself is unhealthy.
 
 #### Step 6: Post-loop safety check
 
@@ -647,15 +653,13 @@ distinguish "no shards exist" from "all shards were grabbed by other workers"
 
 The `Throttled` variant is for claim cooldown, covered in section 3.10.
 
-The `BackendError` variant surfaces infrastructure errors from the
-coordination backend (e.g., network timeout, storage unavailability). The
-caller may retry after a backoff. This variant propagates from both
+The `BackendError` variant wraps an `InfraError`, which classifies
+infrastructure failures into transient errors (e.g., network timeout,
+storage unavailability) and data corruption. The caller may retry after a
+backoff for transient errors. This variant propagates from both
 `GetRunError::BackendError` (via the `From<GetRunError>` impl on the
-candidate-collection path) and `AcquireError::BackendError(InfraError)`
-(when a per-shard acquire attempt hits an infrastructure failure).
-`ClaimError::BackendError` wraps the full `InfraError` enum, preserving
-the `Transient`/`Corruption` classification so callers can decide retry
-eligibility based on the failure category.
+candidate-collection path) and `AcquireError::BackendError` (when a
+per-shard acquire attempt hits an infrastructure failure).
 
 ### 3.8.4 Complexity Analysis
 

@@ -242,9 +242,9 @@ Here is the definition from `in_memory.rs`:
 ## How Items Are Scanned
 
 The in-memory connector does not expose an enumeration method. Instead, the
-connector provides its API surface (read and split-point methods) for use by
-the `gossip-scanner-runtime` orchestration layer. The runtime iterates the
-sorted item array sequentially, calling `commit.begin_item()` /
+scanner runtime constructs the connector from configuration and drives
+scanning through direct runtime dispatch. The runtime iterates the sorted
+item array sequentially, calling `commit.begin_item()` /
 `commit.finish_item()` per item through the `CommitSink` protocol. The
 connector's `open()` and `read_range()` methods provide content access when
 the runtime needs to feed item bytes to the scanner engine.
@@ -400,6 +400,6 @@ The methods take `&mut self` for API uniformity with connectors that maintain in
 
 ## Summary
 
-The `InMemoryDeterministicConnector` is a test double that provides the connector API surface (read and split-point methods) using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes size hints in a single O(n log n) pass. The connector takes a `Vec<MemItem>` and stores sorted `PreparedItem` records. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical ordering across runs for identical inputs. The connector provides its API surface (read and split-point methods) for use by the `gossip-scanner-runtime` orchestration layer rather than page-by-page enumeration.
+The `InMemoryDeterministicConnector` is a test double that provides the connector API surface (read and split-point methods) using sorted in-memory arrays. Construction sorts items, rejects duplicates, and precomputes size hints in a single O(n log n) pass. The connector takes a `Vec<MemItem>` and stores sorted `PreparedItem` records. Split-point selection uses byte-weighted medians from `common::estimate_split_from_sorted` (backed by `StreamingSplitEstimator`) to balance shards by byte volume rather than item count. The connector is cheaply `Clone`-able via `Arc<[PreparedItem]>` sharing, advertises the full capability set, and guarantees bit-identical ordering across runs for identical inputs. Scanning is driven by the scanner runtime through direct dispatch rather than page-by-page enumeration.
 
 Chapter 6 applies these same patterns to a real filesystem, where lazy indexing, symlink security, and TOCTOU gaps introduce constraints the in-memory connector avoids.

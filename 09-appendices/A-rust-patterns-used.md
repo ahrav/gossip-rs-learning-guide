@@ -436,7 +436,7 @@ impl std::error::Error for IdentityInputError {}
 **Where used in Gossip-rs**:
 - `IdentityInputError` (identity derivation errors)
 - `CoordError` (coordination layer errors)
-- `ErrorClass`, `EnumerateError`, `ConnectorInputError`, `PageShapeError` (connector and persistence errors)
+- `ConnectorError` (connector errors)
 
 **Benefits**:
 - Type-safe error handling (cannot confuse different error types)
@@ -528,10 +528,8 @@ impl<T: CoordinationBackend + RunManagement + ShardClaiming> CoordinationFacade 
 
 **Where used in Gossip-rs**:
 - `CoordinationFacade` / `CoordinationBackend` (in-memory vs persistent)
-- `OrderedContentSource` / `GitRepoExecutor` (filesystem, git families)
-- `CommitSink` (`NoOpCommitSink`, `DurableCommitSink`) — per-item commit lifecycle
+- `CommitSink` (`CliNoOpCommitSink`) — per-item commit lifecycle, defined in `gossip-scanner-runtime`
 - `DoneLedger` (design-stage — planned as a standalone trait; current persistence uses `CommitSink`)
-- `OrderedContentSource` / `GitRepoExecutor` / `CommitSink` (scan pipeline abstraction)
 
 **Benefits**:
 - Test with in-memory backend, deploy with Postgres backend

@@ -68,7 +68,7 @@ graph TD
 | `ObjectVersionId` | 32 B | `from_version_bytes` | `OBJECT_VERSION_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
 | `NormHash` | 32 B | `from_digest` (pub) | — | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | **Yes** (redacted Debug) |
 | `SecretHash` | 32 B | via `key_secret_hash` | `SECRET_HASH_V1` (keyed) | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | **Yes** (redacted Debug) |
-| `RuleFingerprint` | 32 B | `from_bytes` (pub) | `RULE_FINGERPRINT_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
+| `RuleFingerprint` | 32 B | `from_bytes` (pub), `derive_rule_fingerprint(rule_name)` | `RULE_FINGERPRINT_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
 | `FindingId` | 32 B | via `derive_finding_id` | `FINDING_ID_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
 | `OccurrenceId` | 32 B | via `derive_occurrence_id` | `OCCURRENCE_ID_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
 | `ObservationId` | 32 B | via `derive_observation_id` | `OBSERVATION_ID_V1` | `Clone`, `Copy`, `Eq`, `Ord`, `Hash`, `CanonicalBytes` | No |
@@ -116,6 +116,22 @@ Returns `true` if bit 63 is set, marking this as a **split-derived shard**. Root
 - `1xxx_xxxx_xxxx_xxxx` (bit 63 = 1) → Split-derived shard (hash-derived)
 
 This convention allows the system to distinguish root shards from split-derived shards without an external lookup, which is useful for debugging and invariant enforcement.
+
+### derive_rule_fingerprint()
+
+**Source:** `finding.rs:168-172`
+
+```rust
+pub fn derive_rule_fingerprint(rule_name: &str) -> RuleFingerprint {
+    let mut h = RULE_FINGERPRINT_HASHER.clone();
+    h.update(rule_name.as_bytes());
+    RuleFingerprint::from_bytes(finalize_32(&h))
+}
+```
+
+Derives a `RuleFingerprint` from a rule name string using the `RULE_FINGERPRINT_V1` domain constant. The derivation is deterministic: the same rule name always produces the same fingerprint, and different names produce different fingerprints with cryptographic collision resistance. This ensures that a rule produces the same fingerprint regardless of where it appears in the rule list.
+
+`RuleFingerprint` can also be constructed directly via `from_bytes` when the caller already has raw bytes (e.g., deserialization), but `derive_rule_fingerprint` is the standard construction path for rule names.
 
 ### FenceEpoch: Monotonic Fencing
 
@@ -493,6 +509,7 @@ graph TD
 | Connector-instance identity | `instance_id_bytes` | `CONNECTOR_INSTANCE_ID_V1` | `ConnectorInstanceIdHash` |
 | Item identity | `ConnectorTag` + `ConnectorInstanceIdHash` + `locator` | `ITEM_ID_V1` | `StableItemId` |
 | Version identity | `version_bytes` | `OBJECT_VERSION_V1` | `ObjectVersionId` |
+| Rule fingerprint | `rule_name` | `RULE_FINGERPRINT_V1` | `RuleFingerprint` |
 | Secret keying | `TenantSecretKey` + `NormHash` | `SECRET_HASH_V1` (keyed) | `SecretHash` |
 | Finding identity | `TenantId` + `StableItemId` + `RuleFingerprint` + `SecretHash` | `FINDING_ID_V1` | `FindingId` |
 | Occurrence identity | `FindingId` + `ObjectVersionId` + `byte_offset` + `byte_length` | `OCCURRENCE_ID_V1` | `OccurrenceId` |

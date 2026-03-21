@@ -22,8 +22,6 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Budgets**: Per-operation resource limits: `max_items`, `max_bytes`, `deadline`. Passed to connector enumeration and read operations to bound resource consumption. (Chapter 06)
 
-**CheckpointAggregator**: Receipt-driven aggregator in `gossip-scanner-runtime` that advances the committed prefix from durable per-unit receipts. Consumes `UnitCommitReceipt` values that prove findings and done-ledger persistence, and emits checkpoint commit requests when a contiguous prefix of units is durably committed. Defined in `gossip-scanner-runtime/src/checkpoint_aggregator.rs`.
-
 **byte_midpoint**: Approximate bisection point between two keys for split planning. Five-phase algorithm: pad, add, halve, try overflow-normalized, fallback successor. Used by shard algebra to compute split boundaries. (Chapter 05)
 
 **ByteSlab**: Fixed-capacity arena allocator in `gossip-stdx` that provides bump-pointer + free-list allocation for variable-length byte fields. Pre-allocates a single contiguous buffer at startup; used by `InMemoryCoordinator` to pool `ShardRecord` spec and cursor byte fields, eliminating per-field heap allocation on hot paths. (Appendix F, Chapter 04-11)
@@ -56,7 +54,13 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **CoordinationFacade**: Super-trait that unifies `CoordinationBackend` (shard lifecycle), `RunManagement` (run creation/completion), and `ShardClaiming` (claim-next-available). Defined in `gossip-coordination/src/facade.rs`. Used as the primary trait bound when the full coordination API is required. (Chapter 04-13)
 
-**CommitSink**: Trait defined in `gossip-scanner-runtime` for persisting scan results from the detection pipeline. Bridges between the scanner and the coordination/persistence layer. (Chapter 07)
+**CliNoOpCommitSink**: No-op implementation of `CommitSink` used in CLI/local scanning mode. Discards all commit lifecycle calls. Defined in `gossip-scanner-runtime/src/commit_sink.rs`.
+
+**CommitPipeline**: Batching pipeline that aggregates `ScanCheckpoint` updates and forwards them to the `ResultCommitter` for durable persistence. Defined in `gossip-scanner-runtime/src/commit_pipeline.rs`.
+
+**CommitScope**: Scopes a commit operation to a specific context (shard, run, etc.). Defined in `gossip-scanner-runtime/src/commit_model.rs`.
+
+**CommitSink**: Trait defined in `gossip-scanner-runtime` for persisting scan results from the detection pipeline. Bridges between the scanner and the coordination/persistence layer. Implementations include `CliNoOpCommitSink` (local/CLI mode) and `ReceiptCommitSink` (distributed mode). (Chapter 07)
 
 **Cursor**: Opaque token representing position in enumeration. Enables resumption after crash. (Chapter 06)
 
@@ -80,7 +84,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **EnumerateError**: Connector operation failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector planning methods like `choose_split_point`. (Chapter 06)
 
-**Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the connector and runtime orchestration layer. (Chapter 06)
+**Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the runtime dispatch modules (`ordered_content`, `git_repo`). (Chapter 06)
 
 **ErrorClass**: Retryable vs Permanent connector error classification. Retryable errors (timeouts, rate limits) trigger backoff; Permanent errors (not found, access denied) abort the shard. (Chapter 06)
 
@@ -102,17 +106,15 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## G
 
-**GitRepoExecutor**: Trait in `gossip-contracts/src/connector/git.rs` defining the contract for whole-repo Git execution against a prepared local mirror. Takes a `LocalMirror`, `GitSelection`, and `GitExecutionLimits`; returns a `GitRunOutcome`. Implemented by scanner-runtime to bridge `scanner-git` to the connector boundary.
-
 **Golden Vector**: Known-good input/output pair for testing. Ensures identity derivation remains stable across versions. (Chapter 02-09)
 
-**gossip-done-ledger-postgres**: Crate implementing the Postgres-backed `DoneLedger` trait with monotonic lattice merge semantics. Production persistence backend for tracking scanned-item status. Lives at `crates/gossip-done-ledger-postgres/`.
+**gossip-done-ledger-postgres**: Crate implementing the PostgreSQL backend for the done ledger. Implements the `DoneLedger` trait with monotonic lattice merge semantics. Lives at `crates/gossip-done-ledger-postgres/`.
 
-**gossip-findings-postgres**: Crate implementing the Postgres-backed `FindingsSink` trait. Production persistence backend for writing detection findings durably. Lives at `crates/gossip-findings-postgres/`.
+**gossip-findings-postgres**: Crate implementing the PostgreSQL backend for findings storage. Implements the `FindingsSink` trait for durable finding persistence. Lives at `crates/gossip-findings-postgres/`.
 
-**gossip-pg-common**: Crate providing shared Postgres infrastructure (connection pooling, migration runner, test support) used by both `gossip-done-ledger-postgres` and `gossip-findings-postgres`. Lives at `crates/gossip-pg-common/`.
+**gossip-pg-common**: Shared PostgreSQL utilities (connection pooling, migration runner, test support) used by `gossip-done-ledger-postgres` and `gossip-findings-postgres`. Lives at `crates/gossip-pg-common/`.
 
-**gossip-scanner-runtime**: Crate providing runtime orchestration APIs — CLI argument wiring, coordination sink, event sink, commit sink, git repository executor, ordered content source, parity checking between direct and connector execution modes. Lives at `crates/gossip-scanner-runtime/`.
+**gossip-scanner-runtime**: Crate providing runtime orchestration APIs — defines `CommitSink` trait, `CliNoOpCommitSink`, CLI argument wiring, coordination sink, event sink, scanning dispatch via `ordered_content` (filesystem) and `git_repo` (git) modules, and result commit pipeline (`ReceiptCommitSink` / `CommitPipeline` / `ResultCommitter`). Lives at `crates/gossip-scanner-runtime/`.
 
 ## H
 
@@ -196,8 +198,6 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **OP_LOG_CAP**: Compile-time constant (`const OP_LOG_CAP: usize = 16`) defining the maximum number of retained op-log entries per shard. Determines the bounded idempotency window. Verified at compile time via `const _: () = assert!(ShardRecord::OP_LOG_CAP == 16);`. (Chapter 04-03)
 
-**OrderedContentSource**: Component in `gossip-scanner-runtime` that provides ordered content enumeration for the scanner pipeline. Bridges connector enumeration to the scanner's ordered processing model. Defined in `gossip-scanner-runtime/src/ordered_content.rs`.
-
 **OpId**: Idempotency token derived from fencing token. Used to detect duplicate operations. (Chapter 04-03)
 
 **Op-Log**: Log of operations with their OpIds. Enables idempotency checks. (Chapter 04-03)
@@ -208,7 +208,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **PageCommit**: (Design-stage -- not yet implemented.) Typestate-encoded accumulator for findings in a page. States: Accumulating, Sealed, Committed. (Chapter 07-04)
 
-**ParkReason**: Enum explaining why a shard was parked: `PermissionDenied`, `NotFound`, `Poisoned`, `TooManyErrors`, `Other`. Discriminant values are `#[repr(u8)]` and stable for persistence. (Chapter 04-06, 08-03)
+**ParkReason**: Enum explaining why a shard was parked: `SourceUnreachable`, `RateLimited`, etc. (Chapter 04-06, 08-03)
 
 **PathKey**: UTF-8 path key encoded as identity bytes with no normalization. Implements `KeyEncoding` in `gossip-frontier`. Used for filesystem-style shard ranges. (Chapter 05)
 
@@ -236,7 +236,9 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Redacted Debug**: Custom `Debug` impl that hides sensitive data. Used for `TenantSecretKey`. (Appendix A)
 
-**ResultCommitter**: Runtime committer in `gossip-scanner-runtime` that drives the per-item durable write path: validate commit request, write findings to `FindingsSink`, wait for findings durability, write done-ledger row, wait for done-ledger durability, return a `UnitCommitReceipt`. Reuses `PageCommit` typestate to enforce the findings → done-ledger ordering. Defined in `gossip-scanner-runtime/src/result_committer.rs`.
+**ReceiptCommitSink**: Distributed-mode `CommitSink` implementation that captures per-item scan receipts and feeds them into the `CommitPipeline` for batched persistence. Defined in `gossip-scanner-runtime/src/distributed.rs`.
+
+**ResultCommitter**: Final stage of the commit pipeline that writes scan results to the coordination backend and persistence layer. Defined in `gossip-scanner-runtime/src/result_committer.rs`.
 
 **RingBuffer<T, N>**: Fixed-capacity, stack-allocated FIFO ring buffer backed by `MaybeUninit` with power-of-2 bitwise index arithmetic. Used as `RingBuffer<OpLogEntry, 16>` for bounded shard op-logs. `push_back_overwrite` provides O(1) FIFO eviction. Defined in `gossip-stdx`. (Appendix F)
 
@@ -252,11 +254,15 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Safety**: Property that nothing bad happens (no data corruption, no split-brain). Fencing tokens ensure safety. (Chapter 04-04, 08-03)
 
+**ScanCheckpoint**: Tracks committed scan progress for a shard. Replaces the former `CursorUpdate` type. Used by the `CommitPipeline` and `ResultCommitter` to persist incremental progress. Defined in `gossip-scanner-runtime/src/commit_model.rs`.
+
 **scanner-engine**: Crate containing the standalone detection engine — YARA rule compilation, regex-to-anchor optimization, content scanning, and match extraction. Lives at `crates/scanner-engine/`.
 
 **scanner-git**: Crate implementing the Git scanning pipeline — pack file decoding, commit graph walking, blob introduction analysis, diff-based history scanning. Lives at `crates/scanner-git/`.
 
 **scanner-scheduler**: Crate implementing the parallel scan scheduler — thread pool management, work scheduling, archive extraction, pipeline coordination, and simulation harnesses. Lives at `crates/scanner-scheduler/`.
+
+**OrderedContentSource**: Formal ordered enumeration trait for content sources. Used by the `ordered_content` scanning module in `gossip-scanner-runtime` for filesystem-style deterministic enumeration. Defined in `gossip-contracts/src/connector/ordered.rs`.
 
 **ScanItem**: Item bundling key, ref, stable ID, version, and optional metadata. Produced by connectors and consumed by the scan pipeline. (Chapter 06)
 
@@ -305,8 +311,6 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 ## W
 
 **WorkerSession**: Context for a worker's shard assignment: shard ID, range, fencing token, lease expiry. (Chapter 04-03)
-
-**WriteContext**: Small, copyable value object in `gossip-contracts/src/persistence/write_context.rs` that bundles the five write-side routing and fencing fields (`tenant_id`, `policy_hash`, `run_id`, `shard_id`, `fence_epoch`) into a single token. Threaded through runtime commit APIs so backends can enforce stale-writer rejection from one value rather than scattered scalar parameters. (Chapter 07)
 
 **WorkerId**: Identity for a worker process. A `u64`-based type generated by `define_id_64!`. (Chapter 04)
 

@@ -27,208 +27,129 @@ explicitly at error-construction time, with no escape hatch for ambiguity.
 
 The `gossip-contracts::connector::api` module defines the error taxonomy
 (`ErrorClass`, `EnumerateError`, `ReadError`) and the capability declaration
-struct (`ConnectorCapabilities`) that underpin this contract. The connector
-module organizes polymorphism through *family-specific traits*: the
-`ordered::OrderedContentSource` trait for item-at-a-time sources (filesystem,
-in-memory) and the `git::GitRepoExecutor` / `git::GitRepoDiscoverySource` /
-`git::GitMirrorManager` traits for repo-native Git execution.
+struct (`ConnectorCapabilities`) that underpin this contract. Every connector
+is expected to provide the same four inherent methods -- `caps()`,
+`choose_split_point()`, `open()`, `read_range()` -- that form a shared
+surface for split-point selection and content access.
 
 Chapter 2 defined the value types (`ScanItem`, `Budgets`, `Cursor`) that
-flow through these traits. This chapter defines the traits themselves and
+flow through these methods. This chapter defines the methods themselves and
 the error and capability types that govern their behavior.
 
 ---
 
-## The Family-Based Trait Architecture
+## The Four-Method Convention
 
-Connector polymorphism lives at the trait level, organized into families that
-match each source type's natural execution model. Each family composes from
-shared infrastructure (`common.rs` for paging, `types.rs` for value wrappers,
-`api.rs` for error classification) and adds the trait surface specific to
-its execution style.
+Every connector struct exposes the same set of inherent methods. The
+`OrderedContentSource` trait in `connector::ordered` formalizes the
+enumeration contract for ordered-content connectors, while each connector
+also provides the methods as inherent `pub fn` methods for direct use.
 
-### Shared Paging Vocabulary (common.rs)
+The shared surface consists of two groups: **planning methods** that support
+shard management and **read methods** that access item content.
 
-All connector families share a paging vocabulary defined in `common.rs`.
-The key types are:
-
-- **`PageBuf<T>`** -- A non-empty typed page container. Carries a `Vec<T>`
-  of items plus a `PageState` indicating whether the page is terminal or
-  resumable.
-
-- **`PageState`** -- Either `HasMore { cursor }` (the caller must resume
-  with the supplied cursor) or `Complete` (the page is terminal for the
-  current scope).
-
-- **`KeyedPageItem`** -- A trait for items that participate in ordered page
-  emission. Requires `item_key()` (the ordered key) and `size_hint()`.
-  Both `ScanItem` (for ordered sources) and `GitRepoTarget` (for Git
-  discovery) implement this trait.
-
-- **`validate_filled_page`** -- Validates ordering, uniqueness, and
-  shard-bound rules generically for any `KeyedPageItem` page.
-
-### The Ordered-Content Family (ordered.rs)
-
-The `OrderedContentSource` trait models sources whose worker loop is
-naturally: fill a bounded page of `ScanItem` values, scan or skip committed
-items, open or range-read item bytes, and checkpoint progress. Filesystem
-and in-memory connectors implement this trait.
+### Planning Methods
 
 ```rust
-pub trait OrderedContentSource: Send {
-    /// Returns the ordered-content features this source supports.
-    fn capabilities(&self) -> OrderedContentCapabilities;
+// From InMemoryDeterministicConnector (identical signatures on FilesystemConnector)
 
-    /// Fill one bounded page of ordered content items within `shard`.
-    fn fill_page(
-        &mut self,
-        shard: &ShardSpec,
-        cursor: &Cursor,
-        budgets: Budgets,
-    ) -> Result<Option<PageBuf<ScanItem>>, EnumerateError>;
-
-    /// Suggest a split point strictly inside the remaining shard suffix.
-    fn choose_split_point(
-        &mut self,
-        _shard: &ShardSpec,
-        _cursor: &Cursor,
-        _budgets: Budgets,
-    ) -> Result<Option<ItemKey>, EnumerateError> {
-        Ok(None)
-    }
-
-    /// Open the full content for an item.
-    fn open(
-        &mut self,
-        item_ref: &ItemRef,
-        budgets: Budgets,
-    ) -> Result<Box<dyn io::Read + Send>, ReadError>;
-
-    /// Read a byte range from item content.
-    fn read_range(
-        &mut self,
-        _item_ref: &ItemRef,
-        _offset: u64,
-        _dst: &mut [u8],
-        _budgets: Budgets,
-    ) -> Result<usize, ReadError> {
-        Err(ReadError::unsupported("range_read"))
+pub fn caps(&self) -> ConnectorCapabilities {
+    ConnectorCapabilities {
+        seek_by_key: true,
+        token_resume: self.emit_tokens,
+        range_read: true,
+        split_hints: true,
     }
 }
-```
 
-Five methods, not four. The key addition is `fill_page`, which replaces the
-old ad-hoc enumeration pattern with a structured page-returning method.
-`fill_page` returns `Ok(Some(page))` with a non-empty `PageBuf<ScanItem>`
-or `Ok(None)` to signal terminal completion (the empty terminal call in the
-two-call shard completion pattern).
-
-`OrderedContentCapabilities` is a separate capability struct from the
-shared `ConnectorCapabilities`. It declares three flags specific to
-ordered-content sources:
-
-```rust
-pub struct OrderedContentCapabilities {
-    pub range_read: bool,
-    pub split_hints: bool,
-    pub token_resume: bool,
+pub fn choose_split_point(
+    &mut self,
+    shard: &ShardSpec,
+    cursor: &Cursor,
+    _budgets: Budgets,
+) -> Result<Option<ItemKey>, EnumerateError> {
+    // ...
 }
 ```
 
-`choose_split_point` and `read_range` have default implementations (return
-`Ok(None)` and `Err(ReadError::unsupported("range_read"))` respectively),
-so connectors that lack these features only need to implement
-`capabilities`, `fill_page`, and `open`.
+- **`caps(&self) -> ConnectorCapabilities`** -- Returns the static feature
+  profile. Takes `&self` (not `&mut self`) because capability queries must
+  not mutate connector state. Called during planning, before any scanning
+  begins.
 
-### The Git Family (git.rs)
+- **`choose_split_point(&mut self, ...) -> Result<Option<ItemKey>, EnumerateError>`**
+  -- An optional method for connectors that can suggest natural partition
+  boundaries. Connectors that do not support split hints return `Ok(None)`.
+  Connectors that declare `split_hints: true` in their capabilities must
+  provide a meaningful implementation.
 
-Git execution is modeled separately because it operates on whole
-repositories: commit walks, tree diffs, pack-order blob scans, and watermark
-persistence. There is no `open()` or `read_range()` -- the executor controls
-the full scan lifecycle internally.
-
-The Git family splits execution into three traits, each representing a
-distinct phase:
-
-**`GitRepoDiscoverySource`** -- Pages over repository work units in
-deterministic frontier order:
+### Read Methods
 
 ```rust
-pub trait GitRepoDiscoverySource: Send {
-    fn capabilities(&self) -> GitDiscoveryCapabilities;
+// From InMemoryDeterministicConnector (identical signatures on FilesystemConnector)
 
-    fn discover_page(
-        &mut self,
-        shard: &ShardSpec,
-        cursor: &Cursor,
-        budgets: Budgets,
-    ) -> Result<Option<PageBuf<GitRepoTarget>>, EnumerateError>;
+pub fn open(
+    &mut self,
+    item_ref: &ItemRef,
+    _budgets: Budgets,
+) -> Result<Box<dyn io::Read + Send>, ReadError> {
+    // ...
+}
 
-    fn choose_split_point(
-        &mut self,
-        _shard: &ShardSpec,
-        _cursor: &Cursor,
-        _budgets: Budgets,
-    ) -> Result<Option<ItemKey>, EnumerateError> {
-        Ok(None)
-    }
+pub fn read_range(
+    &mut self,
+    item_ref: &ItemRef,
+    offset: u64,
+    dst: &mut [u8],
+    budgets: Budgets,
+) -> Result<usize, ReadError> {
+    // ...
 }
 ```
 
-Each `GitRepoTarget` carries a `RepoKey` (a semantic newtype over
-`ItemKey`) and a `RepoLocator` (where the repository can be found). The
-discovery page uses the same `PageBuf<T>` container as ordered sources,
-because `GitRepoTarget` implements `KeyedPageItem`.
+- **`open(&mut self, item_ref, budgets) -> Result<Box<dyn Read + Send>, ReadError>`**
+  -- Opens an item for sequential reading. The return type is a boxed trait
+  object. This is an intentional design decision: boxing allows the caller to
+  work with readers uniformly without knowing the concrete type, and the heap
+  allocation is acceptable because `open` sits on the WARM path -- called
+  once per item, not once per byte. The IO cost of the subsequent read
+  dwarfs the allocation cost.
 
-**`GitMirrorManager`** -- Acquires or refreshes a local mirror suitable
-for execution:
+  The `'static` lifetime requirement on the reader is also intentional. The
+  reader must own its resources (file handles, HTTP clients, buffers). It
+  cannot borrow from the connector's `&self`, because the caller may hold
+  the reader across multiple calls to the connector.
 
-```rust
-pub trait GitMirrorManager: Send {
-    fn sync_mirror(&mut self, locator: &RepoLocator) -> Result<LocalMirror, GitRunError>;
-}
-```
+- **`read_range(&mut self, item_ref, offset, dst, budgets) -> Result<usize, ReadError>`**
+  -- An optional random-access read path. Connectors without native range
+  support return `ReadError::unsupported("range_read")`. The overflow safety
+  requirement is explicit: implementations must use
+  `offset.checked_add(dst.len() as u64)` before computing the end position.
+  This prevents a u64 arithmetic overflow when `offset` is near `u64::MAX`
+  and `dst` has nonzero length.
 
-**`GitRepoExecutor`** -- Runs the repo-native Git scan against a prepared
-mirror:
+### Inherent Methods and the OrderedContentSource Trait
 
-```rust
-pub trait GitRepoExecutor: Send {
-    fn run_repo(
-        &mut self,
-        mirror: &LocalMirror,
-        selection: &GitSelection,
-        limits: GitExecutionLimits,
-    ) -> Result<GitRunOutcome, GitRunError>;
-}
-```
+Each connector is a concrete struct -- `InMemoryDeterministicConnector`,
+`FilesystemConnector`, `GitConnector` -- that provides the four methods as
+inherent `pub fn` methods. This keeps the per-connector API simple and
+avoids a single monolithic trait.
 
-`GitSelection` combines ref selection policy (`GitRefSelection`), scan mode
-(`GitScanMode`: diff-history or ODB-blob), and merge strategy
-(`GitMergeStrategy`) into one contract-level value. `GitExecutionLimits`
-carries resource knobs (worker counts, cache sizes, binary scanning flag)
-without depending on runtime Git types.
+The `OrderedContentSource` trait in `connector::ordered` provides the formal
+polymorphism boundary for ordered-content connectors. It defines `fill_page`
+for page-based enumeration alongside `open`, `read_range`, and
+`choose_split_point`. The Git family has its own trait surface in
+`connector::git` because whole-repository execution does not fit the
+ordered-content model.
 
-The Git family has its own error type, `GitRunError`, generated by the same
-`define_connector_error!` macro used for `EnumerateError` and `ReadError`.
-It adds one domain-specific constructor: `concurrent_maintenance()` for
-the retryable case where a concurrent `git gc` invalidates repository state.
+The three concrete connectors are:
 
-### Traits as Contract, Inherent Methods as Implementation
-
-The family traits in `gossip-contracts` define the connector contract: the
-method signatures, capability structs, and error types that every connector
-must satisfy. Concrete connectors in `gossip-connectors` provide this
-surface through inherent methods rather than `impl Trait for Type` blocks.
-The runtime calls connector methods directly on concrete types -- there are
-no `Box<dyn OrderedContentSource>` trait objects at dispatch time.
-
-This is a deliberate design: the trait definitions serve as a documented
-contract specification, while the concrete types provide the implementation.
-The Git family's three-phase decomposition (discovery, mirroring, execution)
-ensures that each phase can be tested and composed independently, regardless
-of whether dispatch is monomorphic or dynamic.
+- **`FilesystemConnector`** -- Unix-only connector using `openat`-based
+  traversal with symlink confinement.
+- **`GitConnector`** -- Indexes tracked files via `git ls-files -z` with
+  lazy tri-state lifecycle management.
+- **`InMemoryDeterministicConnector`** -- Deterministic in-memory connector
+  for test harnesses and simulation workloads.
 
 ---
 
@@ -668,31 +589,78 @@ fn default_caps_are_conservative() {
 
 ---
 
-## Runtime Connector Implementations
+## The OrderedContentSource Trait
 
-The family traits defined in `gossip-contracts` are implemented by concrete
-connector types in the `gossip-connectors` crate:
+Beyond the four-method inherent convention, the `gossip-contracts` crate
+defines a formal trait for connectors in the ordered-content family. The
+`OrderedContentSource` trait in `connector::ordered` provides the
+compiler-enforced contract for sources whose worker loop fills bounded
+ordered pages of items:
 
-- **`FilesystemConnector`** (`gossip-connectors/src/filesystem.rs`) --
-  Provides the ordered-content API surface through inherent methods.
-  Enumerates files in sorted directory order, opens them for sequential
-  reading, and supports byte-range reads via `seek`.
+```rust
+// From crates/gossip-contracts/src/connector/ordered.rs
 
-- **`InMemoryDeterministicConnector`** (`gossip-connectors/src/in_memory.rs`) --
-  Provides the ordered-content API surface through inherent methods. Backed
-  by an in-memory dataset for deterministic testing. Supports the full
-  ordered-content surface including split hints and token-based pagination.
+pub trait OrderedContentSource: Send {
+    fn capabilities(&self) -> OrderedContentCapabilities;
 
-- **`GitConnector`** (`gossip-connectors/src/git.rs`) -- Provides the
-  Git execution surface through inherent methods (discovery, mirroring,
-  and repo-native scan execution). Discovers repositories, manages local
-  mirrors, and executes repo-native Git scans.
+    fn fill_page(
+        &mut self,
+        shard: &ShardSpec,
+        cursor: &Cursor,
+        budgets: Budgets,
+    ) -> Result<Option<PageBuf<ScanItem>>, EnumerateError>;
 
-The runtime calls connector methods directly on concrete types rather than
-through trait objects. The family traits in `gossip-contracts` define the
-contract surface that connector authors target, but the runtime dispatch
-is monomorphic -- each connector's `fill_page()`, `open()`,
-`discover_page()`, and other methods are invoked on the concrete type.
+    fn choose_split_point(
+        &mut self,
+        _shard: &ShardSpec,
+        _cursor: &Cursor,
+        _budgets: Budgets,
+    ) -> Result<Option<ItemKey>, EnumerateError> {
+        Ok(None)
+    }
+
+    fn open(
+        &mut self,
+        item_ref: &ItemRef,
+        budgets: Budgets,
+    ) -> Result<Box<dyn io::Read + Send>, ReadError>;
+
+    fn read_range(
+        &mut self,
+        _item_ref: &ItemRef,
+        _offset: u64,
+        _dst: &mut [u8],
+        _budgets: Budgets,
+    ) -> Result<usize, ReadError> {
+        Err(ReadError::unsupported("range_read"))
+    }
+}
+```
+
+The trait defines five methods:
+
+- **`capabilities`** -- Returns `OrderedContentCapabilities`, a struct with
+  three boolean flags: `range_read`, `split_hints`, and `token_resume`.
+  These are family-specific capabilities distinct from the four-flag
+  `ConnectorCapabilities` in `api.rs`.
+
+- **`fill_page`** -- The core enumeration method. Returns `Ok(Some(page))`
+  with a non-empty page of items, or `Ok(None)` to signal terminal
+  completion when no in-scope items remain.
+
+- **`choose_split_point`** -- Default returns `Ok(None)`. Sources that
+  support split hints override this.
+
+- **`open`** and **`read_range`** -- Match the inherent method signatures.
+  `read_range` defaults to returning `ReadError::unsupported`.
+
+Methods take `&mut self` because implementations typically maintain mutable
+internal state. The trait requires `Send` for concurrent multi-shard usage.
+
+This trait is intentionally narrower than a single universal connector model.
+Git repo-native execution is not an ordered-content source; it belongs in its
+own family (the `connector::git` module) because it operates on whole
+repositories rather than item-by-item byte reads.
 
 ---
 
@@ -703,15 +671,14 @@ implementations and the scan pipeline. `ErrorClass` forces a binary retry
 decision at error construction time, eliminating the ambiguity that caused
 the opening failure. `EnumerateError` and `ReadError` are structurally
 identical but nominally distinct, preventing accidental cross-assignment
-between enumeration and read paths. `ConnectorCapabilities` advertises
+between the planning and read paths. `ConnectorCapabilities` advertises
 connector features through four boolean flags with conservative defaults.
-Polymorphism is organized at the family level: `OrderedContentSource` for
-item-at-a-time connectors (with `capabilities()`, `fill_page()`,
-`choose_split_point()`, `open()`, `read_range()`) and the Git family's
-three-trait decomposition (`GitRepoDiscoverySource`, `GitMirrorManager`,
-`GitRepoExecutor`) for repo-native execution. The traits define the
-contract surface; concrete connectors provide the implementation through
-inherent methods, and the runtime dispatches on concrete types.
+Every connector provides the same four inherent methods -- `caps()`,
+`choose_split_point()`, `open()`, `read_range()` -- following a shared
+convention. The `OrderedContentSource` trait in `connector::ordered`
+provides a formal contract for the ordered-content family with `fill_page`
+as the core enumeration method, while the Git family uses its own trait
+surface in `connector::git`.
 
 Chapter 4 examines the circuit breaker design specification that governs
 how error classification feeds into shard lifecycle decisions.

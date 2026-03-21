@@ -72,23 +72,25 @@ let result = coordinator.acquire_and_restore_into(
 - Fencing token enables idempotency checks
 - Lease expiry prevents stuck shards
 
-### Step 3: Worker Scans Items (Boundary 4)
+### Step 3: Worker Scans Items (Boundary 4 + Runtime)
 
 ```rust
-// Worker dispatches scan through gossip-scanner-runtime
-// Based on connector type, the runtime selects the appropriate module:
-// - ordered_content: filesystem and in-memory sources (OrderedContentSource trait)
-// - git_repo: git repositories (GitRepoExecutor trait)
+// Worker claims shard via CoordinationFacade (B2), then the runtime
+// dispatches through the appropriate scanning module:
+//   - `ordered_content` module for filesystem sources
+//   - `git_repo` module for git repository sources
 //
-// For ordered content sources:
-let source = connector.open_ordered_source(&assignment)?;
-let items = source.enumerate_ordered(shard_range)?;
+// Results flow through the commit pipeline:
+//   ReceiptCommitSink → CommitPipeline → ResultCommitter
 
-// For git sources:
-let executor = git_repo::GitRepoExecutor::new(repo_config);
-executor.run(engine, scheduler, event_sink, commit_sink, cancel)?;
-
-// Results flow through CommitSink (gossip-scanner-runtime) and EventSink
+let report = runtime.scan_shard(
+    &shard_assignment,
+    &engine,
+    &config,
+    &event_sink,
+    &commit_sink,
+    &cancel,
+)?;
 ```
 
 **Boundary 4 responsibilities**:
@@ -99,7 +101,7 @@ executor.run(engine, scheduler, event_sink, commit_sink, cancel)?;
 
 **Guarantees**:
 - Items are scanned within shard range bounds
-- The runtime dispatches to the correct scan module based on connector type
+- Runtime handles cursor progression via `CommitPipeline`
 - Error classification determines retry vs park decisions
 
 ### Step 4: Derive StableItemId (Boundary 1)
@@ -241,7 +243,7 @@ for item in page.items {
 **Boundary 5 responsibilities**:
 - Execute `begin_item` → `upsert_findings` → `finish_item` per item
 - In distributed mode, derive identity chains and record progress
-- In CLI mode, `NoOpCommitSink` discards all calls
+- In CLI mode, `CliNoOpCommitSink` discards all calls
 
 **Guarantees**:
 - Per-item atomicity via the three-method lifecycle
@@ -390,11 +392,11 @@ sequenceDiagram
     B2-->>W: AcquireResultView (lease, snapshot, capacity)
 
     loop For each page in shard
-        Note over W,B4: Step 3: Scan via Scanner Runtime
-        W->>B4: runtime dispatches to ordered_content or git_repo module
+        Note over W,B4: Step 3: Scan via Runtime Dispatch
+        W->>B4: runtime.scan_shard(assignment, engine, config, events, commits, cancel)
         B4->>B4: Enumerate items within shard range
         B4->>B1: Construct ItemKeys
-        B4-->>W: Scan results via CommitSink + EventSink
+        B4-->>W: ScanReport
 
         loop For each item in page
             Note over W,B1: Step 4: Derive StableItemId
@@ -462,7 +464,7 @@ sequenceDiagram
 |------|----------|-------|--------|-----------|
 | 1 | B2 | RunManifest | RunId, ShardRecords | Durable manifest |
 | 2 | B2 | WorkerId, RunId | AcquireResultView, FenceEpoch | Exclusive lease |
-| 3 | B4 | ShardRange, Assignment | Scan results via CommitSink | Scanned items within shard |
+| 3 | B4 | ShardRange, Assignment | ScanReport | Scanned items within shard |
 | 4 | B1 | ItemKey, Connector | StableItemId | Cross-run stability (tenant-independent) |
 | 5 | B5 | ItemKey | CommitSink begin/finish | Exactly-once |
 | 6 | B4+B1 | ItemKey | Content, NormHash | Deterministic hash |
@@ -514,10 +516,10 @@ Beyond the five boundary crates, the scanning pipeline is implemented across sev
 - **`scanner-engine`**: The standalone detection engine — YARA rules, regex matching, content scanning. Produces raw findings from byte content.
 - **`scanner-git`**: Git-specific scanning pipeline — pack file decoding, commit walking, blob analysis, diff-based history scanning.
 - **`scanner-scheduler`**: Orchestrates parallel scanning — thread pools, work scheduling, archive extraction, pipeline coordination.
-- **`gossip-scanner-runtime`**: Runtime orchestration — wires CLI arguments to connectors, dispatches scans through `ordered_content` (filesystem/in-memory via `OrderedContentSource` trait) and `git_repo` (git via `GitRepoExecutor` trait) modules, and provides `CommitSink` and `EventSink` for result flow.
+- **`gossip-scanner-runtime`**: Runtime orchestration — defines `CommitSink` trait and `CliNoOpCommitSink`, wires CLI arguments to connectors, dispatches scanning through `ordered_content` (filesystem) and `git_repo` (git) modules, and pipes results through `ReceiptCommitSink` / `CommitPipeline` / `ResultCommitter`.
 - **`gossip-worker`**: The distributed worker binary entry point.
 - **`scanner-rs-cli`**: Standalone scanner CLI binary for local scanning — the primary end-user entry point. Delegates to `gossip_scanner_runtime::cli` for argument parsing and execution, handling only process-exit policy (exit codes, error chain printing to stderr) itself.
 
-In the data flow above, the "Detection Engine (not shown)" in Step 6 corresponds to `scanner-engine`. The `gossip-connectors` crate (Step 3) provides connector implementations (filesystem, git, in-memory), while `gossip-scanner-runtime` handles scan dispatch and result flow through `CommitSink` (defined in `gossip-scanner-runtime/src/commit_sink.rs`).
+In the data flow above, the "Detection Engine (not shown)" in Step 6 corresponds to `scanner-engine`. The `gossip-connectors` crate (Step 3) includes a `git.rs` connector that integrates the git scanning pipeline with the connector boundary.
 
 **Next**: [Failure Modes and Recovery](./03-failure-modes-and-recovery.md) explores how the system handles failures at each boundary.

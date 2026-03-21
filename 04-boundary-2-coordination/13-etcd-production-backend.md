@@ -8,9 +8,7 @@ The `InMemoryCoordinator` implements every coordination trait with full protocol
 
 etcd is a natural choice for this persistence layer. It provides linearizable key-value storage with transactional multi-key writes, lease-based TTLs, and prefix-range scans — exactly the primitives needed for coordination state. The `gossip-coordination-etcd` crate builds the bridge between the coordination protocol and a live etcd cluster. Unlike an approach that would delegate protocol logic to `InMemoryCoordinator` and persist state as a side-effect, the `EtcdCoordinator` implements `CoordinationBackend`, `RunManagement`, and `ShardClaiming` directly against etcd. Every mutation is a CAS transaction against etcd keys. Every query reconstructs domain types from stored blobs. State survives process restarts because it never existed only in memory.
 
-The crate is structured in seven internal modules: `config` for validated connection parameters, shard-count ceilings, and persistence-tuning knobs; `keyspace` for deterministic key construction with typed key wrappers; `codec` for binary serialization of records and owner-key bindings; `backend` for the coordinator structs and trait implementations (itself a directory containing `coordinator.rs`, `run_management.rs`, `shard_coordination.rs`, and `test_support.rs`); `error` for unified failure types; `sim_etcd_kv` (compiled under `cfg(test)` or `feature = "test-support"`) for an in-memory model of the etcd KV subset used in deterministic simulation; and `sim_coordinator` (same cfg gate) for a deterministic coordinator adapter that runs coordination logic against `SimulatedEtcdKV`. The entire crate is marked `#![forbid(unsafe_code)]`. There is no unsafe Rust anywhere in the etcd backend. Every field encoding, bounds check, and allocation rollback operates through safe Rust abstractions.
-
-The crate provides three entrypoints: `EtcdCoordinator` is a sync wrapper that owns a single-threaded Tokio runtime and implements `CoordinationBackend`, `RunManagement`, and `ShardClaiming` by wrapping etcd RPCs in `block_on`. `AsyncEtcdCoordinator` is the async core that implements `AsyncCoordinationBackend` and `AsyncRunManagement` for callers that already have a Tokio runtime. `SimEtcdCoordinator` (test-only) is a sync coordinator backed by `SimulatedEtcdKV` for deterministic simulation and invariant checking without a live etcd server. All three share the same coordination validation and transaction shapes, differing only in transport and execution model.
+The crate is structured in seven internal modules: `config` for validated connection parameters and persistence-tuning knobs, `keyspace` for deterministic key construction, `codec` for binary serialization of records and owner-key bindings, `backend` for the coordinator structs and direct trait implementations, `error` for unified failure types, `sim_etcd_kv` for an in-memory model of the etcd KV subset (point reads, prefix scans, CAS transactions, lease semantics) used in deterministic simulation, and `sim_coordinator` for a deterministic coordinator adapter that runs the sync etcd coordination logic against `SimulatedEtcdKV`. The last two modules are gated behind `cfg(test)` or `feature = "test-support"`. The entire crate is marked `#![forbid(unsafe_code)]`. There is no unsafe Rust anywhere in the etcd backend. Every field encoding, bounds check, and allocation rollback operates through safe Rust abstractions.
 
 From `lib.rs`:
 
@@ -28,11 +26,19 @@ pub mod sim_coordinator;
 pub mod sim_etcd_kv;
 ```
 
+The crate exposes three entrypoints:
+
+- **`EtcdCoordinator`** — sync wrapper that owns a single-threaded Tokio runtime and drives all etcd RPCs via `block_on`. Implements `CoordinationBackend`, `RunManagement`, and `ShardClaiming`. Use this when no async runtime is available.
+- **`AsyncEtcdCoordinator`** — async core that implements `AsyncCoordinationBackend` and `AsyncRunManagement`. Use this when an async runtime is already available (e.g., inside a Tokio task).
+- **`SimEtcdCoordinator`** *(compiled under `cfg(test)` or `feature = "test-support"`)* — sync coordinator backed by `SimulatedEtcdKV` for deterministic simulation and invariant checking without a live etcd server.
+
+All three share the same coordination validation and transaction shapes, differing only in transport and execution model.
+
 This chapter covers the infrastructure layers — config, keyspace, codec, and error — that form the foundation beneath the live backend. Chapter 14 covers how `EtcdCoordinator` uses these primitives to implement the coordination protocol directly against etcd with CAS transactions, owner key fencing, and lease management.
 
 ## Validated Configuration
 
-Before any network I/O occurs, the etcd backend validates its connection parameters through `EtcdCoordinatorConfig`. Configuration validation happens at construction time, not at first use — a pattern that ensures the system fails immediately with a clear error message rather than minutes later when the first etcd RPC fires. The struct captures seven core fields: a list of etcd cluster endpoints, a namespace prefix that scopes all coordination keys, a wall-clock TTL for owner leases, a retry budget for optimistic CAS transactions, a per-tenant shard count ceiling, a global shard count ceiling, and a maximum children-per-split-op limit that bounds the fanout of atomic `split_replace` transactions. Optional authentication and TLS fields are layered on via builder methods.
+Before any network I/O occurs, the etcd backend validates its connection parameters through `EtcdCoordinatorConfig`. Configuration validation happens at construction time, not at first use — a pattern that ensures the system fails immediately with a clear error message rather than minutes later when the first etcd RPC fires. The struct captures nine fields: a list of etcd cluster endpoints, a namespace prefix that scopes all coordination keys, a wall-clock TTL for owner leases, a retry budget for optimistic CAS transactions, per-tenant and global shard count ceilings, a maximum children-per-split-op limit, optional authentication credentials, and optional TLS configuration.
 
 From `config.rs`:
 
@@ -54,7 +60,9 @@ pub struct EtcdCoordinatorConfig {
 }
 ```
 
-The first two fields — `endpoints` and `namespace_prefix` — carry connection identity. The next two — `owner_lease_ttl_secs` and `optimistic_txn_retries` — are persistence-tuning knobs that control how the backend interacts with etcd during live operation. `owner_lease_ttl_secs` controls the wall-clock etcd lease attached to shard owner keys: if a worker dies without releasing its lease, the owner key is automatically deleted after this many seconds. `optimistic_txn_retries` bounds the number of read-modify-write retry loops around a fenced etcd transaction before the backend gives up and returns an error. `max_shards_per_tenant` and `max_total_shards` cap persisted shard growth, matching the in-memory backend's defaults. `max_children_per_op` bounds the fanout of one atomic `split_replace` publication — each child adds 3 transaction entries to a fixed overhead of 9, so operators raising the cap must verify against their cluster's `--max-txn-ops`. These knobs exist because the backend executes CAS transactions directly against etcd — there is no in-memory delegate that absorbs the retry logic.
+The first two fields — `endpoints` and `namespace_prefix` — carry connection identity. The next two — `owner_lease_ttl_secs` and `optimistic_txn_retries` — are persistence-tuning knobs that control how the backend interacts with etcd during live operation. `owner_lease_ttl_secs` controls the wall-clock etcd lease attached to shard owner keys: if a worker dies without releasing its lease, the owner key is automatically deleted after this many seconds. `optimistic_txn_retries` bounds the number of read-modify-write retry loops around a fenced etcd transaction before the backend gives up and returns an error. These knobs exist because the backend executes CAS transactions directly against etcd — there is no in-memory delegate that absorbs the retry logic.
+
+The next three fields — `max_shards_per_tenant`, `max_total_shards`, and `max_children_per_op` — are shard-creation guards. `max_shards_per_tenant` caps persisted shard growth per tenant (default: 100,000, matching the in-memory backend). `max_total_shards` caps shards across the entire backend (default: 1,000,000). `max_children_per_op` bounds the fanout of a single atomic `split_replace` publication (default: 8), keeping the total etcd transaction operation count within the cluster's `--max-txn-ops` limit.
 
 Three constants define the defaults:
 
@@ -70,7 +78,7 @@ Five seconds is generous for LAN and localhost connections but fast enough to su
 
 ### Construction Paths
 
-The primary constructor `new()` accepts endpoints and a namespace prefix, applying default tuning knobs. For callers that need explicit control, `new_with_tuning()` accepts all five parameters (the three tuning knobs plus endpoints and prefix). Shard count ceilings default to the same values as the in-memory backend and can be overridden with the `with_shard_limits` builder method.
+The primary constructor `new()` accepts endpoints and a namespace prefix, applying default tuning knobs. For callers that need explicit control, `new_with_tuning()` accepts all four parameters.
 
 From `config.rs`:
 
@@ -88,7 +96,6 @@ where
         namespace_prefix,
         DEFAULT_OWNER_LEASE_TTL_SECS,
         DEFAULT_OPTIMISTIC_TXN_RETRIES,
-        DEFAULT_MAX_CHILDREN_PER_OP,
     )
 }
 ```
@@ -138,9 +145,9 @@ pub fn with_tls(mut self, tls: etcd_client::TlsOptions) -> Self {
 }
 ```
 
-### Fourteen Validation Error Variants
+### Validation Error Variants
 
-The `validate()` method enforces fourteen rules, each with a dedicated error variant. The seven original endpoint and prefix checks remain, and seven additional variants cover the persistence-tuning knobs and shard-limit constraints.
+The `validate()` method enforces fourteen rules, each with a dedicated error variant. Seven cover endpoint and prefix checks, two cover the persistence-tuning knobs (lease TTL and CAS retries), and five cover the shard-creation guards (retry ceiling, shard count limits, and split fanout bounds).
 
 From `config.rs`:
 
@@ -178,10 +185,7 @@ pub fn validate(&self) -> Result<(), EtcdCoordinatorConfigError> {
         return Err(EtcdCoordinatorConfigError::ZeroOptimisticTxnRetries);
     }
     if self.optimistic_txn_retries > MAX_OPTIMISTIC_TXN_RETRIES {
-        return Err(EtcdCoordinatorConfigError::ExcessiveOptimisticTxnRetries {
-            requested: self.optimistic_txn_retries,
-            max: MAX_OPTIMISTIC_TXN_RETRIES,
-        });
+        return Err(EtcdCoordinatorConfigError::ExcessiveOptimisticTxnRetries { .. });
     }
     if self.max_shards_per_tenant == 0 {
         return Err(EtcdCoordinatorConfigError::ZeroMaxShardsPerTenant);
@@ -193,21 +197,9 @@ pub fn validate(&self) -> Result<(), EtcdCoordinatorConfigError> {
         return Err(EtcdCoordinatorConfigError::ZeroMaxChildrenPerOp);
     }
     if self.max_children_per_op > MAX_CHILDREN_PER_SPLIT_TXN {
-        return Err(
-            EtcdCoordinatorConfigError::MaxChildrenPerOpExceedsEtcdTxnBudget {
-                requested: self.max_children_per_op,
-                max: MAX_CHILDREN_PER_SPLIT_TXN,
-            },
-        );
+        return Err(EtcdCoordinatorConfigError::MaxChildrenPerOpExceedsEtcdTxnBudget { .. });
     }
-    if self.max_children_per_op > MAX_SPLIT_CHILDREN {
-        return Err(
-            EtcdCoordinatorConfigError::MaxChildrenPerOpExceedsGlobalLimit {
-                requested: self.max_children_per_op,
-                global_max: MAX_SPLIT_CHILDREN,
-            },
-        );
-    }
+    // Also checks against the global MAX_SPLIT_CHILDREN contract limit.
 
     Ok(())
 }
@@ -239,7 +231,7 @@ pub enum EtcdCoordinatorConfigError {
 }
 ```
 
-`EmptyEndpoint` and `InvalidEndpointScheme` include the offending index so operators can identify which entry in a multi-endpoint list is wrong. The namespace prefix rules prevent two classes of bugs: a prefix without a leading slash would produce keys that are not absolute etcd paths, and a prefix with a trailing slash would produce double slashes when child segments are appended. `NamespacePrefixContainsDoubleSlash` guards against prefixes like `/gossip//v1` that would create invisible empty path segments in the etcd keyspace. `NonPositiveOwnerLeaseTtl` catches zero or negative values — the TTL is an `i64` because the etcd client API uses signed seconds, but a non-positive TTL is meaningless. `ZeroOptimisticTxnRetries` ensures at least one attempt is made for every CAS transaction. `ExcessiveOptimisticTxnRetries` caps the retry budget at 64 to prevent blocking for minutes under contention. The three shard-limit variants (`ZeroMaxShardsPerTenant`, `ZeroMaxTotalShards`, `ZeroMaxChildrenPerOp`) ensure all capacity ceilings are positive. `MaxChildrenPerOpExceedsEtcdTxnBudget` rejects split fanout values that would exceed etcd's default `--max-txn-ops` limit. `MaxChildrenPerOpExceedsGlobalLimit` enforces the global `MAX_SPLIT_CHILDREN` contract.
+`EmptyEndpoint` and `InvalidEndpointScheme` include the offending index so operators can identify which entry in a multi-endpoint list is wrong. The namespace prefix rules prevent two classes of bugs: a prefix without a leading slash would produce keys that are not absolute etcd paths, and a prefix with a trailing slash would produce double slashes when child segments are appended. `NamespacePrefixContainsDoubleSlash` guards against prefixes like `/gossip//v1` that would create invisible empty path segments in the etcd keyspace. `NonPositiveOwnerLeaseTtl` catches zero or negative values — the TTL is an `i64` because the etcd client API uses signed seconds, but a non-positive TTL is meaningless. `ZeroOptimisticTxnRetries` ensures at least one attempt is made for every CAS transaction. `ExcessiveOptimisticTxnRetries` caps the retry budget to prevent CAS operations from blocking for minutes under contention. The shard-limit variants (`ZeroMaxShardsPerTenant`, `ZeroMaxTotalShards`) ensure at least one shard can be created. `MaxChildrenPerOpExceedsEtcdTxnBudget` prevents the `split_replace` transaction from exceeding etcd's default `--max-txn-ops` limit of 128 (each child adds 3 txn entries to a fixed overhead of 9). `MaxChildrenPerOpExceedsGlobalLimit` ensures the per-op cap does not exceed the protocol-level `MAX_SPLIT_CHILDREN` constant.
 
 ### Credential Redaction in Debug Output
 
@@ -685,7 +677,7 @@ pub enum EtcdCoordinatorError {
 
 Five variants form a progression that mirrors the backend's lifecycle:
 
-1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the 15 constraints was violated.
+1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the nine constraints was violated.
 2. **`Keyspace`** — the namespace prefix could not be converted into a valid keyspace builder.
 3. **`RuntimeBuild`** — the Tokio current-thread runtime could not be created. This is a system-resource failure (fd limits, thread limits) that prevents the sync/async bridge from starting.
 4. **`Codec`** — a v1 blob failed to encode or decode during the given operation. This variant pairs the `EtcdOperation` that triggered the codec call with the `EtcdCodecError` source, preserving both "what were we doing" and "what went wrong with the bytes" in a single error.
@@ -715,26 +707,19 @@ The full `Error` trait implementation chains sources properly, so `anyhow` and `
 
 ## The Public API Surface
 
-The crate's `lib.rs` re-exports a carefully curated set of types. The public API includes `EtcdCoordinator` and `AsyncEtcdCoordinator` (the sync and async backends), `SimEtcdCoordinator` (test-only, for deterministic simulation), `EtcdCoordinatorConfig` and its error type (configuration), `EtcdKeyspace` and its error type plus typed key wrappers (key construction), the codec's public functions and types (`encode_run_record`, `decode_run_record`, `encode_shard_record`, `decode_shard_record`, `encode_owner_value`, `decode_owner_value`, `BlobKind`, `OwnerLeaseValue`, `EtcdCodecError`), and the coordinator error types (`EtcdCoordinatorError`, `EtcdOperation`).
+The crate's `lib.rs` re-exports a carefully curated set of types. The public API includes `EtcdCoordinator` (the backend), `EtcdCoordinatorConfig` and its error type (configuration), `EtcdKeyspace` and its error type (key construction), the codec's public functions and types (`encode_run_record`, `decode_run_record`, `encode_shard_record`, `decode_shard_record`, `encode_owner_value`, `decode_owner_value`, `BlobKind`, `OwnerLeaseValue`, `EtcdCodecError`), and the coordinator error types (`EtcdCoordinatorError`, `EtcdOperation`).
 
 From `lib.rs`:
 
 ```rust
-pub use backend::{AsyncEtcdCoordinator, EtcdCoordinator};
-#[cfg(any(test, feature = "test-support"))]
-pub use backend::{EtcdTestFault, EtcdTestShardSnapshot};
+pub use backend::EtcdCoordinator;
 pub use codec::{
     BlobKind, EtcdCodecError, OwnerLeaseValue, decode_owner_value, decode_run_record,
     decode_shard_record, encode_owner_value, encode_run_record, encode_shard_record,
 };
 pub use config::{EtcdCoordinatorConfig, EtcdCoordinatorConfigError};
 pub use error::{EtcdCoordinatorError, EtcdOperation};
-pub use keyspace::{
-    EtcdKeyspace, EtcdKeyspaceError, RunActiveIndexKey, RunRecordKey, ShardActiveIndexKey,
-    ShardOwnerKey, ShardRecordKey,
-};
-#[cfg(any(test, feature = "test-support"))]
-pub use sim_coordinator::SimEtcdCoordinator;
+pub use keyspace::{EtcdKeyspace, EtcdKeyspaceError};
 ```
 
 Internal details — the `Decoder` struct, the `OwnedRunRecord` and `OwnedShardRecord` intermediates, the encoding primitives, the `StagedShardAllocations` guard — remain private. This boundary ensures that callers depend on stable semantics (encode, decode, connect, use traits) without coupling to implementation details.
@@ -743,12 +728,10 @@ Internal details — the `Decoder` struct, the `OwnedRunRecord` and `OwnedShardR
 
 The `gossip-coordination-etcd` crate builds the complete infrastructure for durable coordination state:
 
-- **`EtcdCoordinatorConfig`** validates endpoints, namespace prefixes, owner lease TTL, optimistic retry budget, shard count ceilings, and split-fanout limits with 15 distinct error variants (including `#[non_exhaustive]` for future extensibility). It redacts credentials in `Debug` output, normalizes whitespace from environment-variable input, and provides builder methods for auth, TLS, and shard limits.
+- **`EtcdCoordinatorConfig`** validates endpoints, namespace prefixes, owner lease TTL, and optimistic retry budget with 9 distinct error variants. It redacts credentials in `Debug` output, normalizes whitespace from environment-variable input, and provides builder methods for auth and TLS.
 - **`EtcdKeyspace`** maps identity tuples to deterministic ASCII keys in a hierarchical layout designed for prefix scans. Sibling separation (`runs/` vs `runs_active/`, `shards/` vs `shards_active/`) prevents cross-category scan pollution. The `_into` buffer-reuse pattern eliminates per-call allocation on hot paths.
 - **The binary codec** uses a 3-byte header (`"v1"` + `BlobKind` tag) followed by little-endian sequential fields. Three blob kinds cover run records, shard records, and owner-key bindings. Two-phase decode (parse into owned intermediates, then materialize into domain types) separates wire concerns from domain construction. Slab allocation rollback provides a strong exception guarantee: the slab is unchanged on decode failure. The `OwnerLeaseValue` codec gives the backend a compact, validated representation of shard ownership for CAS transactions.
 - **`EtcdCoordinatorError`** covers the full failure progression from config validation through runtime construction to codec failures and gRPC errors, with 9 `EtcdOperation` variants labeling every possible failure site.
-
-The crate provides three entrypoints — `EtcdCoordinator` (sync), `AsyncEtcdCoordinator` (async), and `SimEtcdCoordinator` (test-only simulation) — all sharing the same coordination validation and transaction shapes.
 
 ## What's Next
 

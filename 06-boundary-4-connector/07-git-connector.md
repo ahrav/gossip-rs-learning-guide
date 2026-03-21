@@ -26,7 +26,7 @@ wastes time and produces false positives. A Git-specific connector restricts
 enumeration to tracked files only, matching what a developer would see with
 `git status`.
 
-The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~690 lines)
+The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~514 lines)
 provides enumeration and read methods. It indexes
 tracked files via `git ls-files -z`, produces paginated enumeration pages
 from a sorted in-memory snapshot, and serves content reads through
@@ -58,15 +58,13 @@ via BLAKE3.
 struct GitEntry {
     /// Repository-relative path used as both the item key and the item ref.
     key: ItemKey,
-    /// Domain-separated BLAKE3 identity derived from
-    /// `(ConnectorTag, ConnectorInstanceIdHash, key)`.
-    stable_item_id: StableItemId,
-    /// Weak version fingerprint over `(path, size, mtime)`.
-    version: VersionId,
     /// File size in bytes at index time, used as a size hint for budgeting.
     size_hint: u64,
 }
 ```
+
+Two fields -- the connector keeps the entry lightweight. Identity derivation
+and version computation happen at page-assembly time, not at index time.
 
 A key design decision: **item key and item ref share identical bytes.** The
 repository-relative path serves as both the enumeration key (for cursor
@@ -85,9 +83,8 @@ a `StreamingSplitEstimator` for byte-weighted median estimation.
 
 ## The IndexState Lifecycle
 
-Unlike the now-streaming filesystem connector (which uses `Option<WalkState>`
-and retries on every call), `GitConnector` retains a lazy tri-state indexing
-lifecycle that latches permanent failures:
+The `GitConnector` uses a lazy tri-state indexing lifecycle that latches
+permanent failures:
 
 ```rust
 enum IndexState {
@@ -114,23 +111,21 @@ re-attempts with fresh budgets.
 pub struct GitConnector {
     /// Absolute path to the repository root (working directory).
     repo: PathBuf,
-    /// Stable connector-instance scope used for `StableItemId` derivation.
-    connector_instance: ConnectorInstanceIdHash,
-    /// Whether pagination cursors include positional tokens for O(1) resume.
+    /// Whether pagination cursors include positional tokens for O(1)
+    /// resume. Defaults to `true`; set to `false` for key-only cursors.
     emit_tokens: bool,
-    /// Optional upper bound on tracked files.
+    /// Optional upper bound on tracked files. When set, `ensure_indexed`
+    /// rejects repositories that exceed this limit with a permanent error.
     max_tracked_files: Option<usize>,
-    /// Lazy indexing state machine.
+    /// Lazy indexing state machine. See `IndexState`.
     index_state: IndexState,
     /// Sorted snapshot of tracked files, populated by `ensure_indexed`.
     entries: Vec<GitEntry>,
 }
 ```
 
-Construction is infallible (`GitConnector::new(repo)`) -- no I/O occurs.
-The repo path is hashed into a `ConnectorInstanceIdHash` at construction
-time, which scopes `StableItemId` derivation so the same file key in
-different repositories produces distinct identities.
+Five fields. Construction is infallible (`GitConnector::new(repo)`) -- no
+I/O occurs. The repo path is asserted non-empty at construction time.
 Builder methods `with_tokens(bool)` and `with_max_tracked_files(usize)`
 configure behavior before the first enumeration call triggers indexing.
 
@@ -237,57 +232,13 @@ transitions to `Indexed`.
 
 ---
 
-## Weak Versioning
+## Version Model
 
 Git does not expose a strong per-file content hash through `ls-files`, so
-the connector produces weak versions: a BLAKE3 digest over
-`(path, file_size, mtime_nanos)`.
-
-```rust
-fn build_weak_version(
-    key_bytes: &[u8],
-    size_hint: u64,
-    modified: Option<std::time::SystemTime>,
-) -> VersionId {
-    const INLINE_CAP: usize = 152;
-    let total_len = key_bytes.len() + 24;
-    let modified_nanos = modified
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-
-    if total_len <= INLINE_CAP {
-        let mut buf = [0u8; INLINE_CAP];
-        buf[..key_bytes.len()].copy_from_slice(key_bytes);
-        buf[key_bytes.len()..key_bytes.len() + 8].copy_from_slice(&size_hint.to_le_bytes());
-        buf[key_bytes.len() + 8..key_bytes.len() + 24]
-            .copy_from_slice(&modified_nanos.to_le_bytes());
-        VersionId::Weak(ObjectVersionId::from_version_bytes(&buf[..total_len]))
-    } else {
-        let mut version_material = Vec::with_capacity(total_len);
-        version_material.extend_from_slice(key_bytes);
-        version_material.extend_from_slice(&size_hint.to_le_bytes());
-        version_material.extend_from_slice(&modified_nanos.to_le_bytes());
-        VersionId::Weak(ObjectVersionId::from_version_bytes(&version_material))
-    }
-}
-```
-
-The function uses an inline stack buffer (152 bytes) for paths up to 128
-bytes, avoiding heap allocation for the common case. When `modified` is
-`None` (filesystems without mtime support), the mtime component defaults to
-zero -- still unique per `(path, size)` but with reduced change sensitivity.
-
----
-
-## How Scanning is Driven
-
-The git connector does not expose a page-by-page enumeration method to
-external callers. Instead, scanning is orchestrated through
-`gossip-scanner-runtime`, which uses the `git_repo` module to drive git
-scanning via the `GitRepoExecutor` trait. The lazy indexing, shard-bound
-resolution, and split estimation described above are used internally by the
-runtime and the connector's read methods.
+the connector produces **weak** versions: a BLAKE3 digest over
+`(path, file_size, mtime_nanos)`. Two snapshots of the same file will
+yield identical versions only when both size and mtime agree. This is
+sufficient for change-detection but does not guarantee content identity.
 
 ---
 
@@ -368,5 +319,5 @@ versioning from `(path, size, mtime)` provides change detection without
 content hashing. Read-time containment re-canonicalizes
 paths before every open to catch symlink escapes created after indexing.
 
-Scanning is orchestrated through `gossip-scanner-runtime`, which uses the
-`git_repo` module to drive git scanning via the `GitRepoExecutor` trait.
+Chapter 8 covers the connector dispatch architecture and how these
+connectors integrate with the scanner runtime.

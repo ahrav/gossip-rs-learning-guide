@@ -96,7 +96,7 @@ crates/
 ├── scanner-engine/                 (Detection engine: YARA rules, regex, content scanning)
 ├── scanner-git/                    (Git scanning pipeline: pack decoding, commit walking, blob analysis)
 ├── scanner-scheduler/              (Scheduler and parallel scan runtime)
-├── gossip-scanner-runtime/         (Runtime orchestration: CLI wiring, scan dispatch, CommitSink, event sink)
+├── gossip-scanner-runtime/         (Runtime orchestration: CLI wiring, coordination sink, event sink)
 ├── gossip-worker/                  (Worker binary entry point)
 ├── scanner-rs-cli/                 (Standalone scanner CLI binary)
 └── scanner-engine-integration-tests/ (Integration tests for scanner-engine)
@@ -126,8 +126,8 @@ Cargo can build crates in topological order:
 2. **Tier 1**: `gossip-contracts`, `gossip-pg-common` (depend on `gossip-stdx` or external only)
 3. **Tier 2**: `gossip-coordination`, `gossip-coordination-etcd`, `gossip-frontier`, `scanner-engine`, `scanner-scheduler`, `gossip-persistence-inmemory` (depend on tier 0-1 crates)
 4. **Tier 3**: `scanner-git`, `gossip-done-ledger-postgres`, `gossip-findings-postgres` (depend on tier 1-2 crates)
-5. **Tier 4**: `gossip-connectors` (depends on tier 1-3 crates)
-6. **Tier 5**: `gossip-scanner-runtime` (depends on contracts, scheduler, scanner-git)
+5. **Tier 4**: `gossip-connectors` (depends on tier 1-2 crates)
+6. **Tier 5**: `gossip-scanner-runtime` (depends on connectors, coordination, scheduler, scanner-git)
 7. **Tier 6**: `gossip-worker`, `scanner-rs-cli` (depend on `gossip-scanner-runtime`)
 8. **Test-only**: `scanner-engine-integration-tests` (depends on scanner-engine, scanner-git, scanner-scheduler)
 
@@ -163,9 +163,11 @@ gossip-connectors        → gossip-contracts, gossip-stdx,
                            scanner-engine, scanner-git, scanner-scheduler
 gossip-done-ledger-postgres → gossip-contracts, gossip-pg-common
 gossip-findings-postgres → gossip-contracts, gossip-pg-common
-gossip-scanner-runtime   → gossip-contracts, gossip-stdx,
-                           scanner-engine, scanner-scheduler, scanner-git
-gossip-worker            → gossip-scanner-runtime
+gossip-scanner-runtime   → gossip-contracts, gossip-coordination, gossip-frontier,
+                           gossip-stdx, scanner-engine, scanner-scheduler, scanner-git
+gossip-worker            → gossip-scanner-runtime, gossip-contracts,
+                           gossip-coordination-etcd, gossip-done-ledger-postgres,
+                           gossip-findings-postgres
 scanner-rs-cli           → gossip-scanner-runtime
 scanner-engine-integration-tests → gossip-stdx, scanner-engine, scanner-git, scanner-scheduler
 ```
@@ -175,7 +177,7 @@ scanner-engine-integration-tests → gossip-stdx, scanner-engine, scanner-git, s
 ### Anti-Pattern: Coordination depends on Persistence
 ```rust
 // WRONG: Coordination imports from Persistence
-use gossip_scanner_runtime::CommitSink;
+use gossip_scanner_runtime::commit_sink::CommitSink;
 
 impl Coordinator {
     fn commit(&self, sink: &dyn CommitSink) {
