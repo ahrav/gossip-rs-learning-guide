@@ -111,19 +111,20 @@ Two methods define the read surface:
 
 ---
 
-## The Five-Module Architecture
+## The Six-Module Architecture
 
-The connector module is split into five focused submodules, each with a
+The connector module is split into six focused submodules, each with a
 distinct responsibility. Two are internal organization units (`api`, `types`)
-whose public items are re-exported at the `connector::` boundary. Three are
-public namespaced modules (`common`, `ordered`, `git`) that define
-family-specific contracts.
+whose public items are re-exported at the `connector::` boundary. Four are
+public namespaced modules (`common`, `conformance`, `ordered`, `git`) that
+define family-specific contracts and reusable test infrastructure.
 
 Here is the module structure from `mod.rs`:
 
 ```rust
 mod api;
 pub mod common;
+pub mod conformance;
 pub mod git;
 pub mod ordered;
 mod types;
@@ -153,18 +154,25 @@ The modules compose in a layered dependency order:
   | PagingCapabilities, KeyedPageItem,                |
   | validate_filled_page                              |
   +-------------------------------------------------+
-                       /     \
-                      v       v
-  Layer 4a: ordered.rs       Layer 4b: git.rs
-  +---------------------+   +------------------------+
-  | OrderedContent       |   | Git family contract:   |
-  |   Capabilities       |   |   RepoKey, RepoLocator,|
-  | OrderedContent       |   |   GitRepoTarget,       |
-  |   Source trait        |   |   GitRepoDiscovery     |
-  | (fill_page, open,    |   |   Source, GitMirror     |
-  |  read_range)         |   |   Manager, GitRepo     |
-  +---------------------+   |   Executor             |
-                             +------------------------+
+                       /  |  \
+                      v   |   v
+  Layer 4a: ordered.rs  | Layer 4b: git.rs
+  +---------------------+ | +------------------------+
+  | OrderedContent       | | | Git family contract:   |
+  |   Capabilities       | | |   RepoKey, RepoLocator,|
+  | OrderedContent       | | |   GitRepoTarget,       |
+  |   Source trait        | | |   GitRepoDiscovery     |
+  | (fill_page, open,    | | |   Source, GitMirror     |
+  |  read_range)         | | |   Manager, GitRepo     |
+  +---------------------+ | |   Executor             |
+                           | +------------------------+
+                           v
+  Layer 4c: conformance.rs (pub)
+  +-------------------------------------------------+
+  | Reusable ordered-content conformance harness:     |
+  | run_ordered_content_conformance,                  |
+  | drain_ordered_source                              |
+  +-------------------------------------------------+
 ```
 
 **Layer 1 (types)** defines value types and validation errors. These are pure
@@ -194,9 +202,14 @@ family models sources whose worker loop fills bounded ordered pages of
 `GitRepoDiscoverySource`, `GitMirrorManager`, and `GitRepoExecutor`. This
 family models whole-repository execution rather than item-by-item enumeration.
 
+**Layer 4c (conformance)** provides a reusable ordered-content conformance
+harness (`run_ordered_content_conformance`, `drain_ordered_source`) that
+validates connector implementations against the `OrderedContentSource` contract.
+
 Family modules compose from the shared layers instead of inheriting a single
-universal connector model: `ordered` and `git` depend on `common`, `types`,
-and `api` for paging, value wrappers, and error classification.
+universal connector model: `ordered`, `git`, and `conformance` depend on
+`common`, `types`, and `api` for paging, value wrappers, and error
+classification.
 
 The `mod.rs` re-exports flatten `api` and `types` into a single import
 boundary at `gossip_contracts::connector`. The family contracts stay
@@ -472,9 +485,10 @@ read (`open`, `read_range`) for content access -- model operations with
 independent scaling and failure characteristics. Concrete connector types
 provide these as inherent methods; polymorphism lives at the family-specific
 trait layer (`OrderedContentSource` for ordered-content connectors, dedicated
-Git traits for repository execution). Five submodules (types, api, common,
-ordered, git) separate value validation from API vocabulary, shared paging
-primitives, and family-specific contracts. The toxic-byte principle
+Git traits for repository execution). Six submodules (types, api, common,
+conformance, ordered, git) separate value validation from API vocabulary,
+shared paging primitives, conformance testing infrastructure, and
+family-specific contracts. The toxic-byte principle
 ensures that `Debug` and `Display` never emit raw connector bytes,
 preventing accidental secret leakage into logs. Error classification splits
 cleanly into input validation (`ConnectorInputError`) and operation outcomes

@@ -29,31 +29,35 @@ flowchart LR
 
 Each stage is a potential failure point, and each failure is reported through a structured error type. The runtime never lets a configuration error propagate to the driver level -- every validation happens at the top of the pipeline, before any resources are allocated or any scanning begins.
 
-## 2. ExecutionMode -- A Vestigial Flag
+## 2. ExecutionMode -- Two Distinct Paths
 
-The runtime defines two execution modes, but both execute the same code path:
+The runtime defines two execution modes that route to genuinely different code paths:
 
 ```rust
 /// How the runtime acquires source items.
 ///
-/// In unified execution mode this flag is retained for CLI compatibility and
-/// telemetry only; both variants route through the same scan-driver path.
+/// `Direct` dispatches via the local scan implementation. `Connector`
+/// selects the source-family boundary: filesystem scans run one ordered
+/// connector page acquisition/validation step, while Git connector mode
+/// uses the direct path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExecutionMode {
+    /// Scan source items directly from local state.
     #[default]
     Direct,
+    /// Scan through the connector/runtime family path.
     Connector,
 }
 ```
 
-The doc comment is explicit: "both variants route through the same scan-driver path." The `Direct` and `Connector` modes existed in an earlier architecture where the two paths had different execution models. The unification to a single scan-driver seam made the distinction obsolete, but the flag was retained for two reasons: backward compatibility with CLI interfaces that expose `--execution-mode`, and telemetry tagging so operators can see which mode was requested even though the execution is identical.
-
-The top-level filesystem dispatcher makes the equivalence visible:
+The top-level filesystem dispatcher routes based on the mode:
 
 ```rust
 /// Top-level filesystem scan dispatcher.
 ///
-/// Both execution modes currently call the same unified scan path.
+/// Routes to `scan_fs_direct` or `scan_fs_connector` based on
+/// [`FsScanConfig::execution_mode`]. Direct mode runs the local scan;
+/// connector mode exercises the ordered-content page-fill boundary.
 pub fn scan_fs(config: &FsScanConfig) -> Result<ScanReport, ScanRuntimeError> {
     match config.execution_mode {
         ExecutionMode::Direct => scan_fs_direct(config),
@@ -62,19 +66,63 @@ pub fn scan_fs(config: &FsScanConfig) -> Result<ScanReport, ScanRuntimeError> {
 }
 ```
 
-And the connector variant delegates directly:
+**Direct mode** uses null sinks and lightweight execution. No connector is constructed, no budgets are validated, no page acquisition occurs. The scan runs through the scheduler-driven local path:
 
 ```rust
-/// Connector-mode filesystem scan.
+/// Filesystem scan using null sinks (no event or commit output).
 ///
-/// Unified model note: this currently executes identically to
-/// [`scan_fs_direct`], preserving one execution path.
-pub fn scan_fs_connector(config: &FsScanConfig) -> Result<ScanReport, ScanRuntimeError> {
-    scan_fs_direct(config)
+/// Suitable for headless / batch scans where only the aggregate report matters.
+pub fn scan_fs_direct(config: &FsScanConfig) -> Result<ScanReport, ScanRuntimeError> {
+    let out = NullEventOutput;
+    let commit = commit_sink::CliNoOpCommitSink;
+    let cancel = CancellationToken::new();
+    scan_fs_with_runtime(config, &out, &commit, &cancel).map(|outcome| outcome.report)
 }
 ```
 
-The same pattern applies to `scan_git`/`scan_git_direct`/`scan_git_connector`. The parity between modes is not merely documented -- it is enforced by tests in `lib_tests.rs` that verify both modes produce identical `ScanReport` values for the same input. The `scan_fs_connector_matches_direct_for_directory` test creates a fixture with 6 files, scans with both modes, and asserts that `items_scanned` and `findings_emitted` are equal.
+**Connector mode** validates the path, constructs a `FilesystemConnector`, creates `Budgets`, builds a `RestoredShardState`, and runs through `OrderedContentRuntime`. This exercises the full ordered-content page-fill boundary -- the same path that a distributed worker would use:
+
+```rust
+/// Connector-mode filesystem scan (single-page validation boundary).
+///
+/// Validates the target path, constructs a [`FilesystemConnector`], and
+/// executes one ordered page acquisition through
+/// [`ordered_content::OrderedContentRuntime`]. Content reads, rule execution,
+/// and durability are handled by the direct filesystem runtime path.
+pub fn scan_fs_connector(config: &FsScanConfig) -> Result<ScanReport, ScanRuntimeError> {
+    let canonical_path = validate_fs_path(&config.path)?;
+    let budgets = Budgets::try_new(config.budgets.max_items, config.budgets.max_bytes, None)?;
+    let state = RestoredShardState::new(
+        ShardSpec::unbounded(),
+        Cursor::initial(),
+        CursorSemantics::Completed,
+    );
+    let runtime_input = ordered_content::OrderedContentRuntimeInput::new(state, budgets);
+    let mut source = FilesystemConnector::new(canonical_path);
+
+    match ordered_content::OrderedContentRuntime::execute_source(&mut source, &runtime_input)? {
+        ordered_content::OrderedContentExecutionOutcome::Finished => Ok(ScanReport::default()),
+        ordered_content::OrderedContentExecutionOutcome::Page(page) => {
+            if page.page().state().next_cursor().is_some() {
+                let items = page.report().items_scanned;
+                tracing::warn!(
+                    items_scanned = items,
+                    "connector page indicates more items available; \
+                     scan result is partial"
+                );
+            }
+            Ok(page.report())
+        }
+        ordered_content::OrderedContentExecutionOutcome::Stopped(stop) => {
+            Err(ScanRuntimeError::Driver(anyhow::anyhow!("{stop}")))
+        }
+    }
+}
+```
+
+The connector-mode path constructs an unbounded `ShardSpec` and an initial `Cursor`, then runs a single page acquisition. If the page indicates more items are available (via a non-`None` next cursor), a warning is logged -- the CLI entry point processes only one page, so the scan result may be partial for large directory trees.
+
+The Git dispatcher follows a different pattern: `scan_git_connector` delegates directly to `scan_git_direct`, because the Git source family does not yet use the ordered-content page-fill boundary.
 
 The `ExecutionMode` is parsed from strings with standard case-insensitive matching:
 
@@ -106,7 +154,7 @@ Scan budgets control checkpoint frequency and byte limits. These are the operati
 pub struct ScanBudgets {
     /// Maximum items processed between checkpoints.
     pub max_items: usize,
-    /// Runtime-level byte budget knob (must be non-zero).
+    /// Runtime-level byte budget knob.
     pub max_bytes: u64,
 }
 
@@ -128,7 +176,7 @@ The budget validation rejects zero values for both fields:
 
 ```rust
 impl ScanBudgets {
-    fn validate(&self) -> Result<(), ScanRuntimeError> {
+    pub fn validate(self) -> Result<(), ScanRuntimeError> {
         if self.max_items == 0 {
             return Err(ScanRuntimeError::ConnectorInput(
                 ConnectorInputError::ZeroBudget { field: "max_items" },
@@ -172,7 +220,7 @@ pub struct FsScanConfig {
     pub rules_file: Option<PathBuf>,
     /// Transform decoder filter.
     pub transform_filter: TransformFilter,
-    /// Retained for compatibility; both variants currently share one path.
+    /// Execution mode selector.
     pub execution_mode: ExecutionMode,
     /// Scan execution budget controls.
     pub budgets: ScanBudgets,
@@ -279,7 +327,7 @@ pub struct GitScanConfig {
     pub tree_delta_cache_mb: Option<u32>,
     /// Optional engine chunk size override in MiB.
     pub engine_chunk_mb: Option<u32>,
-    /// Retained for compatibility; both variants currently share one path.
+    /// Execution mode selector.
     pub execution_mode: ExecutionMode,
     /// Scan execution budget controls.
     pub budgets: ScanBudgets,
@@ -391,7 +439,7 @@ The function uses `git rev-parse --show-toplevel` to find the actual repository 
 The runtime defines a structured error enum that captures context for every failure mode:
 
 ```rust
-/// Runtime wiring errors for unified scan execution.
+/// Runtime wiring errors for scan execution.
 #[derive(Debug)]
 pub enum ScanRuntimeError {
     InvalidPath {
@@ -399,7 +447,6 @@ pub enum ScanRuntimeError {
         path: PathBuf,
         message: String,
     },
-    UnsupportedConnectorKind(ConnectorKind),
     GitCommandFailed {
         repo: PathBuf,
         status_code: Option<i32>,
@@ -419,11 +466,9 @@ pub enum ScanRuntimeError {
 }
 ```
 
-Six structured variants plus one escape hatch:
+Five structured variants plus one escape hatch:
 
 **`InvalidPath`** includes the source kind (`"filesystem"` or `"git"`), the offending path, and a human-readable message. An operator seeing this error knows immediately which path failed and why.
-
-**`UnsupportedConnectorKind`** reports attempts to use the `InMemory` connector in the production runtime. The variant carries the `ConnectorKind` value for diagnostic display.
 
 **`GitCommandFailed`** includes the repo path, the git exit code (`Option<i32>` because the process may be killed by a signal), and the stderr output. This is the information an operator needs to diagnose git infrastructure problems.
 
@@ -459,7 +504,7 @@ The runtime crate contains several supporting modules beyond the core orchestrat
 
 **`parity.rs` -- JSONL parity helpers for cross-scanner validation.** This module provides canonical finding comparison utilities for validating gossip-rs output against the reference scanner-rs implementation. It normalizes both finding shapes (`type="finding"` + `rule` from scanner-rs and `rule_name` from gossip-rs), requires matching `commit_meta` events for git findings with `commit_id`, and sorts output findings for deterministic comparison. The parity module enables regression testing that ensures gossip-rs and scanner-rs produce equivalent results for the same input.
 
-**`cli_tests.rs` -- Integration tests for CLI-mode scan paths.** This module exercises the `scan_fs_direct`, `scan_fs_connector`, `scan_git_direct`, and `scan_git_connector` entry points with fixture data, verifying that both execution modes produce identical reports and that configuration validation rejects invalid inputs.
+**`cli_tests.rs` -- Integration tests for CLI-mode scan paths.** This module exercises the `scan_fs_direct`, `scan_fs_connector`, `scan_git_direct`, and `scan_git_connector` entry points with fixture data, verifying that configuration validation rejects invalid inputs and that both execution modes produce expected results.
 
 **`commit_sink.rs` and `coordination_sink.rs`** implement the persistence-side sink contracts. These are covered in detail in [Chapter 3](03-event-and-commit-sinks.md).
 

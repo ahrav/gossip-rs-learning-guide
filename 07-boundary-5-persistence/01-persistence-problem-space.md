@@ -230,7 +230,7 @@ pub struct ObservationRecord {
     shard_id: ShardId,
     fence_epoch: FenceEpoch,
     seen_at: LogicalTime,
-    location: Option<Location>,
+    location: Option<Arc<Location>>,
 }
 ```
 
@@ -423,7 +423,7 @@ where
 
 ## Input Validation: PersistenceInputError
 
-The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers ten validation failure modes:
+The persistence boundary enforces strict input validation on all record constructors. `PersistenceInputError` covers twelve validation failure modes:
 
 From `error.rs`:
 
@@ -439,6 +439,8 @@ pub enum PersistenceInputError {
     UnexpectedErrorCode { status: &'static str },
     OrphanedReference { child_type: &'static str, parent_type: &'static str },
     InconsistentTenant,
+    ProvenanceOrdering { started_at: u64, finished_at: u64 },
+    KeyMismatch { existing: Box<DoneLedgerKey>, incoming: Box<DoneLedgerKey> },
 }
 ```
 

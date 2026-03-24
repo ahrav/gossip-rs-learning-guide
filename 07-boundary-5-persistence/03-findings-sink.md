@@ -224,7 +224,7 @@ pub struct ObservationRecord {
     shard_id: ShardId,
     fence_epoch: FenceEpoch,
     seen_at: LogicalTime,
-    location: Option<Location>,
+    location: Option<Arc<Location>>,
 }
 ```
 
@@ -248,7 +248,7 @@ Ten fields. This is the widest record in the findings model, and deliberately so
 The `Location` type is defined in the connector module:
 
 ```rust
-// crates/gossip-contracts/src/connector/types.rs:833-837
+// crates/gossip-contracts/src/connector/types.rs:928-932
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Location {

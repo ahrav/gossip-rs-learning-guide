@@ -62,7 +62,7 @@ The resolved configuration is one of two variants:
 ```rust
 pub enum ResolvedWorkerConfig {
     Local(LocalWorkerConfig),
-    Distributed(DistributedWorkerConfig),
+    Distributed(Box<DistributedWorkerConfig>),
 }
 ```
 

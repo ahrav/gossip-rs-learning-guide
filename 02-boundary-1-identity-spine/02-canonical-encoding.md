@@ -246,4 +246,4 @@ fn finding_id_inputs_field_order_matters() {
 | Fixed-width composite | Write fields sequentially (no prefixes) | `FindingIdInputs` → 128 bytes |
 | Mixed-width composite | Fixed fields first (no prefix), variable fields last (auto-prefixed) | `ItemIdentityKey` → `[tag: 8B][instance: 32B][len: 4B][locator]` |
 
-**Next chapter:** Domain Separation Registry (`domain.rs`) — the 15 domain constants and their uniqueness enforcement.
+**Next chapter:** Domain Separation Registry (`domain.rs`) — the 16 domain constants and their uniqueness enforcement.

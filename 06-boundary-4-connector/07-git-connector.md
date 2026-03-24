@@ -37,6 +37,8 @@ standard filesystem I/O with path traversal defenses.
 ## Connector Identity
 
 ```rust
+// crates/gossip-contracts/src/connector/mod.rs
+
 /// Connector tag used to domain-separate stable item identity derivation.
 pub const GIT_CONNECTOR_TAG: ConnectorTag = ConnectorTag::from_ascii(b"gitlocal");
 ```

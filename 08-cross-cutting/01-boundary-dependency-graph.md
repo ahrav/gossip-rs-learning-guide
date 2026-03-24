@@ -74,7 +74,7 @@ Each dependency edge represents specific type usage:
 
 ## Crate Structure
 
-The workspace contains 17 crates. The dependency graph maps directly to crate structure:
+The workspace contains 18 crates. The dependency graph maps directly to crate structure:
 
 ```
 crates/
@@ -97,6 +97,7 @@ crates/
 ├── scanner-git/                    (Git scanning pipeline: pack decoding, commit walking, blob analysis)
 ├── scanner-scheduler/              (Scheduler and parallel scan runtime)
 ├── gossip-scanner-runtime/         (Runtime orchestration: CLI wiring, coordination sink, event sink)
+├── gossip-orchestrator/            (High-level orchestration for multi-source scan coordination)
 ├── gossip-worker/                  (Worker binary entry point)
 ├── scanner-rs-cli/                 (Standalone scanner CLI binary)
 └── scanner-engine-integration-tests/ (Integration tests for scanner-engine)
@@ -163,8 +164,10 @@ gossip-connectors        → gossip-contracts, gossip-stdx,
                            scanner-engine, scanner-git, scanner-scheduler
 gossip-done-ledger-postgres → gossip-contracts, gossip-pg-common
 gossip-findings-postgres → gossip-contracts, gossip-pg-common
-gossip-scanner-runtime   → gossip-contracts, gossip-coordination, gossip-frontier,
-                           gossip-stdx, scanner-engine, scanner-scheduler, scanner-git
+gossip-scanner-runtime   → gossip-contracts, gossip-connectors, gossip-coordination,
+                           gossip-frontier, gossip-stdx, scanner-engine,
+                           scanner-scheduler, scanner-git
+gossip-orchestrator      → gossip-coordination, gossip-frontier
 gossip-worker            → gossip-scanner-runtime, gossip-contracts,
                            gossip-coordination-etcd, gossip-done-ledger-postgres,
                            gossip-findings-postgres

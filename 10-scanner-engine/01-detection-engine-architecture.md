@@ -18,14 +18,20 @@ pub mod perf_counters;
 pub mod pool;
 pub mod regex2anchor;
 pub mod scratch_memory;
+#[cfg(test)]
+pub mod test_utils;
+#[cfg(any(test, feature = "tiger-harness", feature = "test-support"))]
+pub mod tiger_harness;
 
 mod api;
+#[cfg(any(test, feature = "test-support"))]
+mod demo;
 mod engine;
-mod perf_stats;
+use gossip_stdx::perf_stats;
 mod rules;
 ```
 
-> **Note**: Test-support and harness modules (`test_utils`, `tiger_harness`, `demo`) are gated behind `cfg(test)` or feature flags and are omitted here.
+> **Note**: `test_utils` is gated behind `#[cfg(test)]`. `tiger_harness` is available under `test`, `tiger-harness`, or `test-support` feature flags. `demo` provides demo engine construction helpers under `test` or `test-support`.
 
 The `api` module defines all configuration types (`RuleSpec`, `TransformConfig`, `Tuning`) and result types (`Finding`, `FindingRec`). The `rules` module handles YAML parsing and regex compilation. The `engine` module contains the runtime — everything that executes after compilation.
 
@@ -65,9 +71,10 @@ mod simd_classify;
 mod transform;
 mod vectorscan_prefilter;
 mod vs_cache;
-```
 
-> **Note**: Test modules are omitted from this listing for clarity.
+#[cfg(test)]
+mod tests;
+```
 
 This decomposition is not organizational convenience. Each module corresponds to a distinct phase in the scan pipeline, and the dependencies between modules encode the data-flow order.
 

@@ -24,7 +24,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 ### Coordination Contracts (Boundary 2 — contract types)
 
-`crates/gossip-contracts/src/coordination/` (8 files)
+`crates/gossip-contracts/src/coordination/` (9 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -35,6 +35,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-contracts/src/coordination/pooled.rs` | 04-01, 04-11 | PooledShardSpec, PooledCursor, arena-pooled shard fields |
 | `crates/gossip-contracts/src/coordination/split.rs` | 04-06 | Shard splitting, dynamic work distribution |
 | `crates/gossip-contracts/src/coordination/manifest.rs` | 04-01 | RunManifest definition and metadata |
+| `crates/gossip-contracts/src/coordination/restored_state.rs` | 04-01 | RestoredShardState for shard recovery |
 | `crates/gossip-contracts/src/coordination/limits.rs` | 04-01 | Coordination limit constants |
 
 ### gossip-coordination (Boundary 2 — runtime)
@@ -72,7 +73,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 #### gossip-coordination Simulation Harness
 
-`crates/gossip-coordination/src/sim/` (14 files)
+`crates/gossip-coordination/src/sim/` (17 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -90,10 +91,13 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/sim/proptest_state_machine_tests.rs` | 08-05 | Proptest state-machine coordination tests |
 | `crates/gossip-coordination/src/sim/overload.rs` | 08-05 | Overload simulation scenarios |
 | `crates/gossip-coordination/src/sim/overload_tests.rs` | 08-05 | Overload simulation tests |
+| `crates/gossip-coordination/src/sim/composition.rs` | 08-05 | Simulation composition utilities |
+| `crates/gossip-coordination/src/sim/scan_driver_sim.rs` | 08-05 | Simulated scan driver for DST |
+| `crates/gossip-coordination/src/sim/shared.rs` | 08-05 | Shared simulation types and helpers |
 
 ### gossip-coordination-etcd (Boundary 2 — etcd backend)
 
-`crates/gossip-coordination-etcd/src/` (12 files)
+`crates/gossip-coordination-etcd/src/` (12 files + `backend/` subdirectory with 4 files)
 
 etcd-backed coordination backend implementing the full coordination trait surface (`CoordinationBackend`, `RunManagement`, `ShardClaiming`) against a real etcd cluster. Production-path alternative to the in-memory coordinator.
 
@@ -128,7 +132,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 
 ### Connector Contracts (Boundary 4)
 
-`crates/gossip-contracts/src/connector/` (9 files)
+`crates/gossip-contracts/src/connector/` (10 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -141,6 +145,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-contracts/src/connector/ordered.rs` | 06-07 | OrderedContentSource trait for deterministic enumeration |
 | `crates/gossip-contracts/src/connector/types.rs` | 06-01, 06-02 | ScanItem, ItemRef, Budgets, ConnectorCapabilities, ErrorClass, ItemKey, TokenBytes |
 | `crates/gossip-contracts/src/connector/types_tests.rs` | 06-01, 06-02 | Connector type tests |
+| `crates/gossip-contracts/src/connector/conformance.rs` | 06-01 | Ordered-content conformance harness |
 
 ### Persistence Contracts (Boundary 5)
 
@@ -379,6 +384,21 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | Source File | Topics |
 |------------|---------|
 | `crates/gossip-worker/src/main.rs` | Distributed worker binary entry point |
+
+### gossip-orchestrator
+
+`crates/gossip-orchestrator/src/` (6 files)
+
+High-level orchestration for multi-source scan coordination. Plans scan jobs, constructs runtime payloads, and drives setup for distributed scan execution.
+
+| Source File | Topics |
+|------------|---------|
+| `crates/gossip-orchestrator/src/lib.rs` | Crate root, module declarations |
+| `crates/gossip-orchestrator/src/payload.rs` | Scan payload types for runtime dispatch |
+| `crates/gossip-orchestrator/src/planner.rs` | Scan job planning and scheduling |
+| `crates/gossip-orchestrator/src/request.rs` | Scan request types |
+| `crates/gossip-orchestrator/src/setup.rs` | Runtime setup and configuration |
+| `crates/gossip-orchestrator/src/test_support.rs` | Test support utilities |
 
 ### scanner-rs-cli
 
