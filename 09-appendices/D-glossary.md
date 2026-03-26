@@ -4,7 +4,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## A
 
-**Accumulating**: (Design-stage — not yet implemented.) Type state for `PageCommit` during which findings can be added. Transitions to `Sealed` state when page is sealed. (Chapter 07)
+**AwaitingFindings**: Entry type state for `PageCommit<S>` before any durability is confirmed. Findings can be submitted; transitions to `FindingsDurable` when the findings receipt is recorded. (Chapter 07-04)
 
 **Atomicity**: Property of an operation that either completes entirely or not at all (no partial state). Example: Page commit is atomic (findings + done-ledger + cursor advance). (Chapter 07, 08-03)
 
@@ -32,11 +32,11 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **CanonicalBytes**: Trait for deterministic serialization to bytes. Used by all identity types for encoding. (Chapter 02-02)
 
-**Circuit Breaker**: Pattern for preventing cascading failures. Opens after N failures, prevents further requests, closes after cooldown. (Chapter 06, 08-03)
+**Circuit Breaker**: Design pattern for preventing cascading failures. Gossip-rs implements the spirit of this pattern via `ErrorClass` (Retryable/Permanent) and shard parking (`ParkReason::TooManyErrors`) rather than a dedicated `CircuitBreaker` type. (Chapter 03-05, 06-03)
 
 **Collision**: When two distinct inputs produce the same hash. BLAKE3 provides 256-bit collision resistance (~2^128 operations to find). (Appendix B)
 
-**Committed**: (Design-stage — not yet implemented.) Type state for `PageCommit` after findings have been durably written. Terminal state. (Chapter 07)
+**CheckpointDurable**: Terminal type state for `PageCommit<S>` after all three durability stages (findings, done-ledger, checkpoint) are complete. Contains the `PageCommitReceipt` proving the frontier boundary is durable. (Chapter 07-04)
 
 **Connector**: Component that bridges Gossip-rs to external systems (GitHub, S3, etc.). Implements enumeration and content reading. (Chapter 06)
 
@@ -115,6 +115,8 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 **gossip-pg-common**: Shared PostgreSQL utilities (connection pooling, migration runner, test support) used by `gossip-done-ledger-postgres` and `gossip-findings-postgres`. Lives at `crates/gossip-pg-common/`.
 
 **gossip-scanner-runtime**: Crate providing runtime orchestration APIs — defines `CommitSink` trait, `CliNoOpCommitSink`, CLI argument wiring, coordination sink, event sink, scanning dispatch via `ordered_content` (filesystem) and `git_repo` (git) modules, and result commit pipeline (`ReceiptCommitSink` / `CommitPipeline` / `ResultCommitter`). Lives at `crates/gossip-scanner-runtime/`.
+
+**gossip-orchestrator**: High-level orchestration for multi-source scan coordination — plans scan jobs, constructs runtime payloads, and drives setup for distributed scan execution. Lives at `crates/gossip-orchestrator/`.
 
 ## H
 
@@ -206,7 +208,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## P
 
-**PageCommit**: (Design-stage -- not yet implemented.) Typestate-encoded accumulator for findings in a page. States: Accumulating, Sealed, Committed. (Chapter 07-04)
+**PageCommit\<S\>**: Typestate machine enforcing commit ordering (findings → done-ledger → checkpoint) at compile time. States: `AwaitingFindings`, `FindingsDurable`, `ItemDurable`, `CheckpointDurable`. Defined in `gossip-contracts/src/persistence/page_commit.rs`. (Chapter 07-04)
 
 **ParkReason**: Enum explaining why a shard was parked: `PermissionDenied`, `NotFound`, `Poisoned`, `TooManyErrors`, `Other`. Stable `#[repr(u8)]` discriminants. (Chapter 04-06, 08-03)
 
@@ -266,7 +268,9 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ScanItem**: Item bundling key, ref, stable ID, version, and optional metadata. Produced by connectors and consumed by the scan pipeline. (Chapter 06)
 
-**Sealed**: (Design-stage — not yet implemented.) Type state for `PageCommit` after sealing (no more findings can be added). Ready for commit. (Chapter 07-04)
+**FindingsDurable**: Type state for `PageCommit<S>` after findings are durably written. Carries the `FindingsCommitReceipt`. Transitions to `ItemDurable` when the done-ledger receipt is recorded. (Chapter 07-04)
+
+**ItemDurable**: Type state for `PageCommit<S>` after both findings and done-ledger rows are durable. Carries the composite `ItemCommitReceipt`. Transitions to `CheckpointDurable` when the checkpoint receipt is recorded. (Chapter 07-04)
 
 **SecretHash**: Keyed hash of NormHash using TenantSecretKey. Ensures tenant isolation for FindingId. (Chapter 02-06, 08-04)
 
@@ -300,7 +304,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **TokenBytes**: Opaque pagination token wrapper with toxic-byte redaction. Wraps connector-produced resume tokens and sanitizes them for safe logging. (Chapter 06)
 
-**Typestate**: Rust pattern of encoding state in the type system. `PageCommit<S>` uses typestate (design-stage — not yet implemented). (Appendix A)
+**Typestate**: Rust pattern of encoding state in the type system. `PageCommit<S>` uses typestate to enforce commit ordering at compile time — invalid stage transitions are type errors. (Chapter 07-04, Appendix A)
 
 **TTL**: Time-To-Live. Leases expire after TTL if not renewed. (Chapter 04-03)
 
@@ -357,10 +361,10 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 | Fencing Token | 04-04 |
 | Idempotency | 04-03, 08-03 |
 | Connector | 06 |
-| Circuit Breaker | 06, 08-03 |
+| Circuit Breaker | 03-05, 06-03 (pattern, not a type) |
 | Cursor | 06 |
 | Persistence | 07 |
-| PageCommit | 07-04 (design-stage) |
+| PageCommit | 07-04 |
 | Done Ledger | 07-02 |
 | Tenant Isolation | 08-04 |
 | Failure Recovery | 08-03 |
@@ -371,7 +375,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 For in-depth explanations:
 - **Boundary definitions**: Chapter 00 (Architecture Overview)
-- **Identity derivation**: Chapters 02-01 through 02-10
+- **Identity derivation**: Chapters 02-01 through 02-09
 - **Coordination protocols**: Chapter 04
 - **Failure recovery**: Chapter 08-03
 - **Rust patterns**: Appendix A

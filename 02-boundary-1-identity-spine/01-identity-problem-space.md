@@ -174,7 +174,6 @@ The following chapters walk through each layer of the identity module:
 - **Chapter 7**: Policy hash (`policy.rs`)
 - **Chapter 8**: The macro system (`macros.rs`)
 - **Chapter 9**: Golden vectors and testing (`golden.rs`)
-- **Chapter 10**: Version migration
 
 Each chapter includes:
 - Full code references with line numbers

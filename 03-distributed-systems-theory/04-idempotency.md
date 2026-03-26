@@ -278,4 +278,4 @@ fn test_checkpoint_idempotency() {
 
 ---
 
-**Next**: [05-failure-detection.md](./05-failure-detection.md) explains how Gossip-rs detects worker failures using lease expiry and circuit breakers, enabling safe recovery without false positives.
+**Next**: [05-failure-detection.md](./05-failure-detection.md) explains how Gossip-rs detects worker failures using lease expiry and error classification, enabling safe recovery without false positives.

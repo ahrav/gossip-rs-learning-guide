@@ -134,7 +134,7 @@ Adaptive failure detection. Gossip-rs lease expiry uses timeout-based detection,
 **Nygard, Michael T.** (2007, 2018)
 *Release It! Design and Deploy Production-Ready Software, 2nd Edition*
 Pragmatic Bookshelf
-Circuit breakers and stability patterns. Gossip-rs B4 connectors implement circuit breakers for external APIs.
+Circuit breakers and stability patterns. Gossip-rs B4 connectors use error classification and shard parking for external API fault isolation, implementing the spirit of the circuit breaker pattern.
 
 ## Impossibility Results
 

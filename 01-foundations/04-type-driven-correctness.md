@@ -320,68 +320,72 @@ The asymmetry is intentional: secret keys are special and must be handled with c
 
 The typestate pattern uses the type system to enforce **state machine protocols**.
 
-In Gossip-rs B5 (Ledger), the `PageCommit` type uses typestate to enforce a three-phase commit protocol (design-stage — not yet implemented in crate, shown as the intended pattern):
+In Gossip-rs B5 (Persistence), the `PageCommit<S>` type uses typestate to enforce commit ordering across three durability stages:
 
 ```rust
-// Phase 1: Intent (not yet written)
-struct PageCommit<Intent> {
-    page_id: PageId,
-    data: Vec<u8>,
-    _state: PhantomData<Intent>,
+// State 1: AwaitingFindings (no durability confirmed yet)
+struct PageCommit<AwaitingFindings> {
+    scope: Arc<CommitScope>,
+    state: AwaitingFindings,
 }
 
-// Phase 2: Pending (written, not yet committed)
-struct PageCommit<Pending> {
-    page_id: PageId,
-    offset: u64,
-    _state: PhantomData<Pending>,
+// State 2: FindingsDurable (findings receipt recorded)
+struct PageCommit<FindingsDurable> {
+    scope: Arc<CommitScope>,
+    state: FindingsDurable,  // carries FindingsCommitReceipt
 }
 
-// Phase 3: Committed (durably stored)
-struct PageCommit<Committed> {
-    page_id: PageId,
-    offset: u64,
-    _state: PhantomData<Committed>,
+// State 3: ItemDurable (findings + done-ledger durable)
+struct PageCommit<ItemDurable> {
+    scope: Arc<CommitScope>,
+    state: ItemDurable,  // carries ItemCommitReceipt
+}
+
+// State 4: CheckpointDurable (terminal -- all stages durable)
+struct PageCommit<CheckpointDurable> {
+    scope: Arc<CommitScope>,
+    state: CheckpointDurable,  // carries PageCommitReceipt
 }
 ```
 
 Each state has different available methods:
 
 ```rust
-impl PageCommit<Intent> {
-    pub fn write(self, log: &mut Log) -> PageCommit<Pending> {
-        // Transition: Intent → Pending
-    }
+impl PageCommit<AwaitingFindings> {
+    pub fn record_findings(self, receipt: FindingsCommitReceipt)
+        -> PageCommit<FindingsDurable>
+    { /* Transition: AwaitingFindings → FindingsDurable */ }
 }
 
-impl PageCommit<Pending> {
-    pub fn commit(self, log: &mut Log) -> PageCommit<Committed> {
-        // Transition: Pending → Committed
-    }
+impl PageCommit<FindingsDurable> {
+    pub fn record_done_ledger(self, receipt: DoneLedgerCommitReceipt)
+        -> Result<PageCommit<ItemDurable>, PageCommitValidationError>
+    { /* Transition: FindingsDurable → ItemDurable */ }
 }
 
-impl PageCommit<Committed> {
-    pub fn offset(&self) -> u64 {
-        self.offset // Only accessible after commit
-    }
+impl PageCommit<ItemDurable> {
+    pub fn record_checkpoint(self, receipt: CheckpointCommitReceipt)
+        -> Result<PageCommit<CheckpointDurable>, PageCommitValidationError>
+    { /* Transition: ItemDurable → CheckpointDurable */ }
 }
 ```
 
 The compiler enforces the protocol:
 
 ```rust
-let intent = PageCommit::new(page_id, data);
-let pending = intent.write(&mut log); // Must write before committing
-let committed = pending.commit(&mut log); // Must commit before reading offset
+let page = PageCommit::new(scope);
+let findings_done = page.record_findings(findings_receipt);
+let item_done = findings_done.record_done_ledger(dl_receipt)?;
+let checkpoint_done = item_done.record_checkpoint(cp_receipt)?;
 
 // Can't skip steps
-let intent = PageCommit::new(page_id, data);
-let offset = intent.offset(); // Error: no method `offset` on PageCommit<Intent>
+let page = PageCommit::new(scope);
+page.record_checkpoint(cp_receipt); // Error: no method `record_checkpoint` on PageCommit<AwaitingFindings>
 ```
 
 This is **compile-time enforcement** of a runtime protocol. Invalid state transitions are impossible.
 
-Typestate is covered in depth in the B5 (Ledger) chapter. The key insight: **the type system can encode more than just data types—it can encode state machines**.
+Typestate is covered in depth in Chapter 07-04 (Commit Protocol Typestate). The key insight: **the type system can encode more than just data types--it can encode state machines**.
 
 ## Why Macros, Not Generics?
 

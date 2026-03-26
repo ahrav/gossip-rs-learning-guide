@@ -68,9 +68,9 @@ a missing object returns HTTP 404).
 
 By keeping the method groups separate, orchestration can compose them
 independently. A connector might enumerate items on one thread and read items
-on another. A circuit breaker can trip on the read path (too many 5xx errors
-fetching content) without halting enumeration. A test harness can mock
-enumeration while using a real read path, or vice versa.
+on another. Error classification can park a shard on the read path (too many
+retryable errors fetching content) without halting enumeration. A test harness
+can mock enumeration while using a real read path, or vice versa.
 
 Each concrete connector type (e.g., `FilesystemConnector`, `GitConnector`)
 provides these methods as inherent `pub fn` methods. The
@@ -254,8 +254,8 @@ from becoming a catch-all.
   concerns live elsewhere.
 - **Retry and backoff policy.** The connector contract defines error
   classification (`Retryable` vs. `Permanent`) and advisory backoff hints
-  (`retry_after_ms`). The actual retry scheduling, circuit-breaker
-  transitions, and global rate limiting are runtime concerns.
+  (`retry_after_ms`). The actual retry scheduling, shard parking
+  decisions, and global rate limiting are runtime concerns.
 
 ---
 
@@ -372,7 +372,7 @@ Here is the definition from `api.rs`:
 /// Binary retry posture for connector operation failures.
 ///
 /// Orchestration layers use this to decide whether to re-attempt an operation
-/// or to escalate (park the shard, trigger a circuit breaker transition, etc.).
+/// or to escalate (park the shard, etc.).
 /// The classification is set by the connector at error-construction time and is
 /// immutable thereafter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,7 +398,7 @@ separate types despite having identical fields: "enumeration and reading are
 modeled as separate operations with independent scaling characteristics
 (metadata-bound vs bandwidth-bound). Keeping their error types distinct means
 public signatures are unambiguous about which operation failed, orchestration
-can apply different retry/circuit-breaker policies per operation without
+can apply different retry/parking policies per operation without
 downcasting or tag-matching, and the compiler prevents accidental
 cross-assignment between the two paths."
 

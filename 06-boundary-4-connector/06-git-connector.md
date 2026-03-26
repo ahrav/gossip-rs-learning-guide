@@ -18,7 +18,7 @@ from becoming the breach vector.*
 
 ## Why a Git Connector Exists
 
-The filesystem connector from Chapter 6 indexes all regular files under a
+The filesystem connector from Chapter 5 indexes all regular files under a
 directory root. But a Git repository is not merely a directory of files --
 it has a tracked-file manifest maintained by `git ls-files`. Scanning
 untracked files (build artifacts, IDE caches, `.git` internal objects)

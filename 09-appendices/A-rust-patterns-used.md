@@ -41,52 +41,45 @@ coordinator.acquire_and_restore_into(now, tenant, key, worker, &mut scratch);  /
 
 **Why use it**: Prevents invalid state transitions at compile time.
 
-**Example** (design-stage — not yet implemented in crate, shown as the intended pattern):
+**Example** (from `gossip-contracts/src/persistence/page_commit.rs`):
 ```rust
 pub struct PageCommit<S> {
-    findings: Vec<Finding>,
-    _state: PhantomData<S>,
+    scope: Arc<CommitScope>,
+    state: S,
 }
 
-pub struct Accumulating;
-pub struct Sealed;
-pub struct Committed;
+pub struct AwaitingFindings;
+pub struct FindingsDurable { findings: FindingsCommitReceipt }
+pub struct ItemDurable { item_commit: ItemCommitReceipt }
+pub struct CheckpointDurable { page_commit: PageCommitReceipt }
 
-impl PageCommit<Accumulating> {
-    pub fn add_finding(&mut self, finding: Finding) {
-        self.findings.push(finding);
-    }
-
-    pub fn seal(self, cursor: Cursor) -> PageCommit<Sealed> {
-        // Transition: Accumulating → Sealed
-        PageCommit {
-            findings: self.findings,
-            cursor: Some(cursor),
-            _state: PhantomData,
-        }
-    }
+impl PageCommit<AwaitingFindings> {
+    pub fn record_findings(self, receipt: FindingsCommitReceipt)
+        -> PageCommit<FindingsDurable>
+    { /* Transition: AwaitingFindings → FindingsDurable */ }
 }
 
-impl PageCommit<Sealed> {
-    // Cannot add findings (method not available)
+impl PageCommit<FindingsDurable> {
+    // Cannot record findings (method not available)
 
-    pub fn commit(self, backend: &Backend) -> PageCommit<Committed> {
-        backend.write(self.findings);
-        // Transition: Sealed → Committed
-        PageCommit {
-            findings: vec![],  // Clear findings
-            _state: PhantomData,
-        }
-    }
+    pub fn record_done_ledger(self, receipt: DoneLedgerCommitReceipt)
+        -> Result<PageCommit<ItemDurable>, PageCommitValidationError>
+    { /* Transition: FindingsDurable → ItemDurable, validates unit count */ }
+}
+
+impl PageCommit<ItemDurable> {
+    pub fn record_checkpoint(self, receipt: CheckpointCommitReceipt)
+        -> Result<PageCommit<CheckpointDurable>, PageCommitValidationError>
+    { /* Transition: ItemDurable → CheckpointDurable, validates full scope */ }
 }
 ```
 
 **Where used in Gossip-rs**:
-- Persistence: `PageCommit<S>` typestate is described in `persistence/mod.rs` doc comments but is **design-stage** (not yet implemented as a concrete struct)
+- Persistence: `PageCommit<S>` typestate is implemented in `gossip-contracts/src/persistence/page_commit.rs`
 
 **Benefits**:
-- Cannot commit unsealed page (compile error)
-- Cannot add findings after sealing (compile error)
+- Cannot skip findings and jump straight to done-ledger (compile error)
+- Cannot record checkpoint before done-ledger (compile error)
 - Self-documenting: type signature shows valid operations
 
 **Reference**: Chapter 07 (Persistence and Page Commits)
@@ -440,27 +433,27 @@ The `thiserror::Error` derive generates `Display` and `Error` trait impls from t
 
 **Reference**: Chapter 02-01 (Identity Module Overview)
 
-## 11. PhantomData for Typestate
+## 11. PhantomData for Type-Level Markers
 
 **What it is**: Zero-size marker type to carry type information without runtime cost.
 
-**Why use it**: Implement typestate pattern without memory overhead.
+**Why use it**: Implement typestate pattern without memory overhead. Note that the actual `PageCommit<S>` stores `state: S` directly rather than `PhantomData<S>`, because the state types carry data (receipts). `PhantomData` is appropriate when the type parameter is purely a compile-time marker with no associated data.
 
 **Example**:
 ```rust
 use std::marker::PhantomData;
 
-pub struct PageCommit<S> {
-    findings: Vec<Finding>,
-    _state: PhantomData<S>,  // Zero-size, compile-time only
+pub struct Handle<Mode> {
+    raw: u64,
+    _mode: PhantomData<Mode>,  // Zero-size, compile-time only
 }
 
-// PhantomData<S> is zero bytes:
-assert_eq!(std::mem::size_of::<PhantomData<Accumulating>>(), 0);
+// PhantomData<Mode> is zero bytes:
+assert_eq!(std::mem::size_of::<PhantomData<ReadOnly>>(), 0);
 ```
 
 **Where used in Gossip-rs**:
-- Typestate pattern in persistence layer
+- Various generic type markers throughout the codebase
 
 **Benefits**:
 - Type-level state machine (compile-time checks)
@@ -524,7 +517,7 @@ impl<T: CoordinationBackend + RunManagement + ShardClaiming> CoordinationFacade 
 **Where used in Gossip-rs**:
 - `CoordinationFacade` / `CoordinationBackend` (in-memory vs persistent)
 - `CommitSink` (`CliNoOpCommitSink`) — per-item commit lifecycle, defined in `gossip-scanner-runtime`
-- `DoneLedger` (design-stage — planned as a standalone trait; current persistence uses `CommitSink`)
+- `DoneLedger` (standalone trait for deduplication tracking — in-memory and PostgreSQL backends)
 
 **Benefits**:
 - Test with in-memory backend, deploy with Postgres backend
@@ -611,7 +604,7 @@ Gossip-rs uses 15 Rust patterns strategically:
 | Constant-time comparison | Timing attack prevention | `TenantSecretKey` |
 | Repr(u8) | Stable encoding | `IdHashMode` |
 | Error enums | Type-safe errors | `IdentityInputError` |
-| PhantomData | Zero-cost typestate | `PageCommit<S>` |
+| PhantomData | Zero-cost type markers | Generic type parameters |
 | Const constructors | Compile-time constants | `TenantId::from_bytes` |
 | Trait abstraction | Swappable backends | `CoordinationFacade` |
 | derive(Copy) | Ergonomic pass-by-value | All 32-byte types |

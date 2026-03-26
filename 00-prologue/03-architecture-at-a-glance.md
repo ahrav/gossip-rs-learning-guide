@@ -143,25 +143,14 @@ See **[→ Chapter 04: Boundary 2, Chapters 7-9](../04-boundary-2-coordination/0
 
 **Key Components**:
 
-1. **Toxic Byte Value Wrappers**: Type-safe wrappers (`ToxicBlob`, `ToxicStr`) that prevent raw byte content from leaking into safe code paths
-2. **Source Enumeration**: Plan and split work via connector capabilities (`caps`, `choose_split_point`)
-3. **Read Connectors**: Fetch content for individual items (`open`, `read_range`)
-4. **Circuit Breakers**: Detect and isolate failing APIs to prevent cascade failures (Closed → Open → HalfOpen state machine)
+1. **Toxic Byte Value Wrappers**: Type-safe wrappers (`ItemKey`, `ItemRef`, `TokenBytes`, `ToxicDigest`) that prevent raw connector bytes from leaking into safe code paths
+2. **Source Enumeration**: Plan and split work via connector capabilities; ordered-content connectors implement `OrderedContentSource`, git connectors implement `GitRepoExecutor`
+3. **Read Connectors**: Fetch content for individual items via family-specific execution traits
+4. **Error Classification**: Binary `Retryable`/`Permanent` classification (`ErrorClass`) drives shard parking decisions, preventing cascade failures without a dedicated circuit breaker type
 6. **In-Memory Connector**: Deterministic connector for testing with configurable fault injection
 7. **Filesystem Connector**: Production connector for local directory tree enumeration
 8. **Git Connector**: Production connector for git repository scanning
-9. **Conformance Harness**: Reusable test suite that validates any connector implementation against the contract
-
-**Circuit Breaker State Machine**:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Closed
-    Closed --> Open: failure_threshold_exceeded
-    Open --> HalfOpen: timeout_expired
-    HalfOpen --> Closed: success
-    HalfOpen --> Open: failure
-```
+9. **Conformance Harness**: Reusable test suite (`conformance::run_ordered_content_conformance`) that validates ordered-content connectors against the contract
 
 **Invariants**:
 
@@ -169,7 +158,7 @@ stateDiagram-v2
 - **INV-S31**: Enumeration is deterministic (same items in same order)
 - **INV-L30**: If source API is healthy, enumeration eventually completes
 
-**Status**: ✅ **Fully implemented** (9 contract files in `gossip-contracts`, 10 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, split estimator, and lib, conformance harness, 8 guide chapters covering ~34,440 words)
+**Status**: ✅ **Fully implemented** (10 contract files in `gossip-contracts`, 10 implementation files in `gossip-connectors` — in-memory, filesystem, git connectors plus common, split estimator, and lib, conformance harness, 6 guide chapters)
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -203,7 +192,7 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 | **B1: Identity** | ✅ Fully Implemented | 11 | 37 | Property tests, golden vectors, unit tests |
 | **B2: Coordination** | ✅ Fully Implemented | 25 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
 | **B3: Shard Algebra** | ✅ Fully Implemented | 7 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
-| **B4: Connector** | ✅ Fully Implemented | 9 contracts + 10 impl + 4 contract tests | 3 | Conformance harness, unit tests |
+| **B4: Connector** | ✅ Fully Implemented | 10 contracts + 10 impl + 4 contract tests | 3 | Conformance harness, unit tests |
 | **B5: Persistence** | 🔧 Contracts + In-Memory + Postgres | 12 contract files + 3 impl crates | 3 | In-memory and PostgreSQL backends |
 
 ### Implementation Progress
@@ -236,13 +225,13 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 
 **Phase 3 (Complete)**: B4 Connector
 
-- Full contract surface in `gossip-contracts/src/connector/` (9 files, including test modules)
+- Full contract surface in `gossip-contracts/src/connector/` (10 files, including test modules)
 - Three concrete implementations: `InMemoryConnector`, `FilesystemConnector`, and `GitConnector` in `gossip-connectors`
 - Split estimator for dynamic shard splitting hints
 - Scan-driver adapter for source-specific execution backends
 - Conformance harness
 - Deterministic enumeration with split hints
-- 8 guide chapters (~34,440 words) covering problem space, toxic byte wrappers, traits, cursor advancement, circuit breakers, all connectors, and conformance
+- 6 guide chapters covering problem space, toxic byte wrappers, traits, all connectors, and conformance
 
 **Phase 4 (Complete)**: Scanner Pipeline
 

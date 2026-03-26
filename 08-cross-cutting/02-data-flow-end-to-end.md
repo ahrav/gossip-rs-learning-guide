@@ -492,7 +492,7 @@ sequenceDiagram
 ### Failure Recovery
 - Worker crash: lease expires → new worker claims shard → resumes from last committed cursor
 - Coordinator crash: rebuild state from persistent backend
-- Source outage: circuit breaker parks shard → retry when healthy
+- Source outage: error classification parks shard via `ParkReason::TooManyErrors` → retry when healthy
 
 ## Summary
 

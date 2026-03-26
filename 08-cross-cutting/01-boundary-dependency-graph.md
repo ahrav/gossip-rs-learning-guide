@@ -63,7 +63,7 @@ Each dependency edge represents specific type usage:
 ### Boundary 5 (Persistence) → Boundary 1 (Identity)
 - **FindingId**: Primary key for findings in the findings sink
 - **OccurrenceId**: Primary key for occurrence records
-- **DoneLedgerKey**: Key for done-ledger entries (domain tag registered as `"gossip/persistence/v1/done-key"`, struct not yet implemented)
+- **DoneLedgerKey**: Key for done-ledger entries (domain tag `"gossip/persistence/v1/done-key"`)
 - **OvidHash**: Object version identity hash (domain tag registered as `"gossip/persistence/v1/ovid"`)
 - **TriageGroupKey**: Grouping key for triage aggregation (domain tag registered as `"gossip/persistence/v1/triage-group"`)
 
@@ -82,7 +82,7 @@ crates/
 │   ├── identity/                   (B1: Identity Spine)
 │   ├── coordination/               (B2: Coordination contract types — ShardSpec, Cursor, Split, Manifest)
 │   ├── connector/                  (B4: Connector traits and types — fully implemented)
-│   └── persistence/                (B5: Persistence contracts — design-stage)
+│   └── persistence/                (B5: Persistence contracts — done-ledger, findings, commit protocol)
 ├── gossip-coordination/            (B2: Coordination runtime — InMemoryCoordinator, facade, sim/)
 │   └── sim/                        (Deterministic simulation harness)
 ├── gossip-coordination-etcd/       (B2: etcd-backed coordination backend)

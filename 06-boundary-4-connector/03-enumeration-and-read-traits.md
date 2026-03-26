@@ -165,7 +165,7 @@ Here is the definition from `api.rs`:
 /// Binary retry posture for connector operation failures.
 ///
 /// Orchestration layers use this to decide whether to re-attempt an operation
-/// or to escalate (park the shard, trigger a circuit breaker transition, etc.).
+/// or to escalate (park the shard, etc.).
 /// The classification is set by the connector at error-construction time and is
 /// immutable thereafter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,7 +212,7 @@ construction time.
 
 The `#[non_exhaustive]` attribute allows future variants (if the retry model
 ever needs refinement), but the current design is intentionally minimal.
-Every downstream consumer -- the scan loop, circuit breakers, metrics
+Every downstream consumer -- the scan loop, shard parking logic, metrics
 counters -- branches on `is_retryable()` and treats the world as binary.
 
 ---
@@ -222,7 +222,7 @@ counters -- branches on `is_retryable()` and treats the world as binary.
 Enumeration and reading are separate operations with different performance
 characteristics. Enumeration is metadata-bound (listing items). Reading is
 bandwidth-bound (fetching content). They scale differently, fail
-differently, and the runtime applies independent retry and circuit-breaker
+differently, and the runtime applies independent retry and parking
 policies to each. The error types must be distinct so that the compiler
 prevents accidental cross-assignment.
 
@@ -414,7 +414,7 @@ define_connector_error! {
     /// Structurally identical to [`EnumerateError`] (same three fields, same
     /// named-constructor pattern), but kept as a distinct type so the compiler
     /// enforces which operation path produced the error. This also allows
-    /// orchestration to apply independent retry and circuit-breaker policies
+    /// orchestration to apply independent retry and parking policies
     /// for reads vs enumerations.
     ///
     /// Fields are private to preserve constructor invariants; use
@@ -704,5 +704,6 @@ provides a formal contract for the ordered-content family with `fill_page`
 as the core enumeration method, while the Git family uses its own trait
 surface in `connector::git`.
 
-Chapter 4 examines the circuit breaker design specification that governs
-how error classification feeds into shard lifecycle decisions.
+Chapter 4 examines the in-memory deterministic connector that implements
+these conventions for testing, Chapter 5 covers the filesystem connector,
+and Chapter 6 covers the git connector.

@@ -184,17 +184,16 @@ sequenceDiagram
     B4->>S: API request
     S-xB4: Timeout (network partition)
 
-    Note over B4: Circuit breaker detects failure
-    B4->>B4: Increment failure count
-    B4-->>W: Error (source unreachable)
+    Note over B4: Error classified as Retryable
+    B4-->>W: EnumerateError (Retryable)
 
     W->>W: Retry with backoff
     W->>B4: scan again via runtime
     B4->>S: API request
     S-xB4: Timeout again
 
-    Note over B4: Circuit breaker opens
-    B4-->>W: CircuitBreakerOpen error
+    Note over B4: Too many consecutive failures
+    B4-->>W: Error (Retryable, max retries exceeded)
 
     W->>B2: park_shard(reason: TooManyErrors)
     B2->>B2: Mark shard as parked
@@ -203,10 +202,9 @@ sequenceDiagram
 
 **Recovery**:
 1. Network partition heals
-2. Circuit breaker transitions to half-open state (after cooldown)
-3. Next worker attempts to enumerate → triggers test request
-4. Test request succeeds → circuit breaker closes
-5. Worker resumes scanning
+2. Admin or scheduler unparks the shard
+3. Next worker acquires lease and attempts enumeration
+4. Request succeeds, scanning resumes
 
 **Guarantee**: Isolated failure. Other connectors/shards unaffected.
 
@@ -248,53 +246,26 @@ The source system (GitHub, S3, etc.) is down or rate-limiting aggressively.
 
 ### What Happens
 
-```mermaid
-stateDiagram-v2
-    [*] --> Closed: Initial state
-    Closed --> Open: N consecutive failures
-    Open --> HalfOpen: After cooldown period
-    HalfOpen --> Closed: Test request succeeds
-    HalfOpen --> Open: Test request fails
-
-    note right of Closed
-        Normal operation
-        Requests go through
-    end note
-
-    note right of Open
-        Fast-fail mode
-        Reject immediately
-        Prevent cascading failure
-    end note
-
-    note right of HalfOpen
-        Testing mode
-        One test request
-        Decide next state
-    end note
-```
+Connector errors carry an `ErrorClass` discriminant: `Retryable` (timeouts, rate limits) or `Permanent` (not found, access denied). The runtime counts consecutive retryable failures. After exceeding the retry threshold, the worker parks the shard with `ParkReason::TooManyErrors`.
 
 **Step-by-step**:
 1. Connector makes API request → fails
-2. Circuit breaker increments failure count
-3. After N failures → circuit breaker opens
-4. Subsequent requests fail fast (no actual API call)
-5. Worker parks shard with `ParkReason::TooManyErrors`
-6. Other connectors are unaffected (independent circuit breakers)
+2. Error classified as `Retryable` → runtime retries with backoff
+3. After N consecutive retryable failures → retry threshold exceeded
+4. Worker parks shard with `ParkReason::TooManyErrors`
+5. Other connectors are unaffected (failures are per-shard)
 
-**After cooldown period**:
-1. Circuit breaker transitions to half-open
-2. Next worker attempts enumeration
-3. Circuit breaker allows one test request
-4. If test succeeds → circuit breaker closes → scanning resumes
-5. If test fails → circuit breaker re-opens → cooldown resets
+**After source recovers**:
+1. Admin or scheduler unparks the shard
+2. Next worker acquires lease and attempts enumeration
+3. Request succeeds → scanning resumes
 
 ### Recovery Path
 
 ```rust
-// Worker detects circuit breaker open (design-stage pseudocode)
+// Worker detects too many retryable errors
 match driver.run(engine, config, events, commits, cancel) {
-    Err(err) if err.is_circuit_breaker_open() => {
+    Err(err) if err.error_class() == ErrorClass::Retryable && retries_exceeded => {
         // Park the shard
         coordinator.park_shard(
             tenant,
@@ -312,7 +283,7 @@ match driver.run(engine, config, events, commits, cancel) {
 }
 ```
 
-**Guarantee**: Source outage does not cascade. Circuit breaker contains the failure. Other connectors continue working.
+**Guarantee**: Source outage does not cascade. Error classification contains the failure. Other connectors continue working.
 
 ## Failure Mode 5: Data Corruption
 
@@ -419,15 +390,15 @@ sequenceDiagram
 | Coordinator crash (persistent backend) | Health check | Restart, rebuild from DB | None | Restart time |
 | Coordinator crash (in-memory) | Health check | Restart run from scratch | All run state | N/A (restart run) |
 | Network partition (worker ↔ coordinator) | Commit timeout | Lease expires, re-acquire | None | Partition duration |
-| Network partition (worker ↔ source) | Circuit breaker | Park shard, retry after cooldown | None | Cooldown period |
-| Source outage | Circuit breaker | Park shard, retry when healthy | None | Outage duration |
+| Network partition (worker ↔ source) | Error classification | Park shard, retry after unpark | None | Until unparked |
+| Source outage | Error classification | Park shard, retry when healthy | None | Outage duration |
 | Data corruption | Derivation mismatch, checksum | Re-scan or discard | Corrupted records only | Re-scan time |
 | Split-brain | Fencing token mismatch | Reject stale worker | None (prevented) | None (prevented) |
 
 ## Recovery Principles
 
 ### 1. Fail Fast
-- Circuit breakers prevent cascading failures
+- Error classification prevents cascading failures by parking shards after repeated retryable errors
 - Fencing tokens reject stale operations immediately
 - Timeouts prevent indefinite blocking
 
@@ -443,7 +414,7 @@ sequenceDiagram
 
 ### 4. Recover Automatically
 - Lease expiry → automatic reassignment
-- Circuit breaker cooldown → automatic retry
+- Parked shards can be unparked when source recovers
 - Idempotent operations → safe to retry
 
 ### 5. Minimize Blast Radius
@@ -546,8 +517,8 @@ async fn network_partition_recovery() {
 Gossip-rs is designed to handle failures at every layer:
 - **Worker failures**: Lease expiry + cursor atomicity ensure no data loss
 - **Coordinator failures**: Persistent backend enables restart without data loss
-- **Network partitions**: Fencing tokens prevent split-brain, circuit breakers contain source failures
-- **Source outages**: Circuit breakers prevent cascading failures, park shards for retry
+- **Network partitions**: Fencing tokens prevent split-brain, error classification contains source failures
+- **Source outages**: Error classification and shard parking prevent cascading failures
 - **Data corruption**: Content-addressed identities enable detection, re-scanning enables recovery
 
 The system prioritizes **safety** (no split-brain, no corruption propagation) over **liveness** (brief unavailability during recovery is acceptable).

@@ -14,7 +14,7 @@ Read chapters in order from 00 through 13. Each chapter builds on concepts intro
 4. **03-distributed-theory** — Deep dive into coordination primitives and impossibility results
 5. **04-boundary-2** — Coordination protocol and split operations (12 chapters)
 6. **05-boundary-3** — Shard algebra: key encoding, hint metadata, startup builder (7 chapters)
-7. **06-boundary-4** — Connector: toxic byte wrappers, enumeration/read traits, circuit breakers, in-memory and filesystem connectors, conformance harness (8 chapters)
+7. **06-boundary-4** — Connector: toxic byte wrappers, enumeration/read traits, error classification, in-memory, filesystem, and git connectors, conformance harness (6 chapters)
 8. **07-boundary-5** — Study persistence, done ledger, and exactly-once semantics
 9. **08-cross-cutting** — Testing strategies, observability, operational concerns
 10. **09-appendices** — References, glossary, TLA+ specifications

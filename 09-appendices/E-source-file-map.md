@@ -453,7 +453,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 | `diagrams/06-fencing-protocol.md` | 04-03 | Fencing protocol sequence diagram |
 | `diagrams/07-lease-lifecycle.md` | 04-03, 04-14 | Lease lifecycle diagram |
 | `diagrams/08-pagecommit-typestate.md` | 07-04 | PageCommit typestate diagram |
-| `diagrams/09-circuit-breaker.md` | 06-04 | Circuit breaker state machine diagram |
+| `diagrams/09-circuit-breaker.md` | — | Circuit breaker design diagram (aspirational) |
 | `diagrams/10-failure-modes-and-recovery.md` | 08-03 | Failure modes and recovery paths |
 | `diagrams/11-tenant-isolation.md` | 08-04 | Tenant isolation architecture |
 | `diagrams/12-split-operations.md` | 04-06, 05-04 | Split operations diagram |
@@ -672,22 +672,18 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-contracts/src/connector/api.rs` (Error taxonomy (ErrorClass, EnumerateError, ReadError) and capability negotiation (ConnectorCapabilities))
   - `crates/gossip-contracts/src/connector/api_tests.rs` (Connector API tests)
 
-- **06-04: Circuit Breaker Design**
-  - `crates/gossip-contracts/src/connector/mod.rs` (circuit breaker contract)
-  - `diagrams/09-circuit-breaker.md` (circuit breaker diagram)
-
-- **06-05: In-Memory Deterministic Connector**
+- **06-04: In-Memory Deterministic Connector**
   - `crates/gossip-connectors/src/in_memory.rs` (InMemoryConnector for testing)
   - `crates/gossip-connectors/src/in_memory_tests.rs` (In-memory connector tests)
 
-- **06-06: Filesystem Connector**
+- **06-05: Filesystem Connector**
   - `crates/gossip-connectors/src/filesystem.rs` (FilesystemConnector)
   - `crates/gossip-connectors/src/filesystem_tests.rs` (FilesystemConnector tests)
   - `crates/gossip-connectors/src/split_estimator.rs` (Split estimator)
   - `crates/gossip-connectors/src/split_estimator_tests.rs` (Split estimator tests)
   - `crates/gossip-connectors/src/common.rs` (Shared connector utilities)
 
-- **06-07: Git Connector**
+- **06-06: Git Connector**
   - `crates/gossip-connectors/src/git.rs` (Git connector)
   - `crates/gossip-connectors/src/git_tests.rs` (Git connector tests)
 
@@ -727,7 +723,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - **08-03: Failure Modes and Recovery**
   - `crates/gossip-coordination/src/lease.rs` (lease expiry)
   - `crates/gossip-coordination/src/session.rs` (session recovery)
-  - `crates/gossip-contracts/src/connector/mod.rs` (circuit breaker contract)
+  - `crates/gossip-contracts/src/connector/api.rs` (error classification)
   - `diagrams/10-failure-modes-and-recovery.md` (failure modes diagram)
 
 - **08-04: Tenant Isolation**
@@ -809,7 +805,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 **Failure recovery**:
 1. Read Chapter 08-03 (Failure Modes and Recovery)
 2. Read `crates/gossip-coordination/src/lease.rs` (lease expiry)
-3. Read `crates/gossip-contracts/src/connector/mod.rs` (circuit breaker)
+3. Read `crates/gossip-contracts/src/connector/api.rs` (error classification)
 
 **Shard splitting**:
 1. Read Chapter 05-04 (Split Computation)

@@ -21,7 +21,7 @@ Engineers who want to understand distributed systems design through a concrete, 
 | B1 | Identity & Hashing Spine | ✅ Fully Implemented | 11 files, 48 invariants, 9 golden vectors, zero unsafe code |
 | B2 | Coordination | ✅ Fully Implemented | 46 source files (26 core + 20 sim) + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (20 sim modules including composition), etcd production backend, TLA+ spec, ~35K lines |
 | B3 | Shard Algebra | ✅ Fully Implemented | 7 source files in gossip-frontier crate, key encoding, hint metadata, builder |
-| B4 | Connector | ✅ Fully Implemented | 10 contract files (6 source + 4 test), 10 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, 7 guide chapters |
+| B4 | Connector | ✅ Fully Implemented | 10 contract files (6 source + 4 test), 10 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, 6 guide chapters |
 | B5 | Persistence | ✅ Fully Implemented | Contract traits + in-memory test doubles + PostgreSQL backends (gossip-done-ledger-postgres, gossip-findings-postgres, gossip-pg-common), conformance harness |
 | — | Scanner Engine | ✅ Extracted | Detection engine: rule loading, content policy, scan engine, reusable scratch |
 | — | Scanner Git | ✅ Extracted | Git scanning pipeline: repo open, commit walk, tree diff, pack decode, blob spill |
@@ -40,7 +40,7 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 4. **03-distributed-theory** — Coordination primitives: leases, fencing, idempotency
 5. **04-boundary-2** — Coordination (B2), split protocol (14 chapters)
 6. **05-boundary-3** — Shard Algebra (B3), key encoding, hint metadata, builder (7 chapters)
-7. **06-boundary-4** — Connector (B4), toxic byte wrappers, split/read/capability methods, circuit breaker design, in-memory and filesystem connectors, git connector (7 chapters)
+7. **06-boundary-4** — Connector (B4), toxic byte wrappers, ordered-content and git traits, error classification, in-memory, filesystem, and git connectors (6 chapters)
 8. **07-boundary-5** — Persistence (B5), done ledger, findings sink, commit protocol, in-memory test doubles, PostgreSQL backends, conformance harness (6 chapters)
 9. **08-cross-cutting** — Testing, failure modes, operational concerns
 10. **09-appendices** — References, glossary, TLA+ specifications
@@ -59,7 +59,7 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 | **03-distributed-theory** | CAP theorem, linearizability, consensus, failure detection |
 | **04-boundary-2** | The coordination problem, leases and fencing, runs and claiming, acquiring and scanning, idempotency and op-log, completion and parking, shard algebra (half-open ranges, split-replace, split-residual), validation layer, reference implementation, simulation and TLA+ (12 chapters) |
 | **05-boundary-3** | Key encoding, range arithmetic, hint metadata, split propagation, startup builder, property tests (7 chapters) |
-| **06-boundary-4** | Connector problem space, toxic byte value wrappers, split/read/capability methods, circuit breaker design, in-memory deterministic connector, filesystem connector with streaming split estimation, git connector, scan-driver adapters (8 chapters) |
+| **06-boundary-4** | Connector problem space, toxic byte value wrappers, ordered-content and git trait surfaces, error classification, in-memory deterministic connector, filesystem connector with streaming split estimation, git connector, conformance harness (6 chapters) |
 | **07-boundary-5** | Done ledger, exactly-once semantics, commit protocol, WAL design |
 | **08-cross-cutting** | Deterministic simulation testing, chaos engineering, observability |
 | **09-appendices** | 30+ academic papers, 70+ Mermaid diagrams, TLA+ specs |
@@ -93,7 +93,7 @@ Focus on Chapter 03 (distributed theory) and Chapter 07 (testing strategy) to un
 
 ## Documentation Stats
 
-- **101 guide chapters** across 14 sections (prologue through scanner runtime)
+- **99 guide chapters** across 14 sections (prologue through scanner runtime)
 - **30+ academic papers** referenced with inline citations
 - **70+ Mermaid diagrams** showing data flow, state machines, and system interactions
 - **Direct code references** to actual implementation across 18 workspace crates including `crates/gossip-contracts/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`, `crates/gossip-connectors/`, `crates/gossip-frontier/`, `crates/gossip-orchestrator/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`, `crates/gossip-pg-common/`, `crates/scanner-engine/`, `crates/scanner-git/`, `crates/scanner-scheduler/`, `crates/gossip-scanner-runtime/`, `crates/gossip-worker/`, `crates/gossip-stdx/`, and `crates/scanner-rs-cli/`

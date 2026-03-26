@@ -346,14 +346,14 @@ For filesystem paths, the validation is straightforward:
 fn validate_fs_path(path: &Path) -> Result<PathBuf, ScanRuntimeError> {
     if !path.exists() {
         return Err(ScanRuntimeError::InvalidPath {
-            source: "filesystem",
+            origin: "filesystem",
             path: path.to_path_buf(),
             message: "path does not exist".to_owned(),
         });
     }
     if !path.is_dir() && !path.is_file() {
         return Err(ScanRuntimeError::InvalidPath {
-            source: "filesystem",
+            origin: "filesystem",
             path: path.to_path_buf(),
             message: "path must be a directory or regular file".to_owned(),
         });
@@ -374,14 +374,14 @@ Git path validation is more rigorous. It must verify not just that a directory e
 fn validate_git_repo_path(path: &Path) -> Result<PathBuf, ScanRuntimeError> {
     if !path.exists() {
         return Err(ScanRuntimeError::InvalidPath {
-            source: "git",
+            origin: "git",
             path: path.to_path_buf(),
             message: "repository path does not exist".to_owned(),
         });
     }
     if !path.is_dir() {
         return Err(ScanRuntimeError::InvalidPath {
-            source: "git",
+            origin: "git",
             path: path.to_path_buf(),
             message: "repository path must be a directory".to_owned(),
         });
@@ -419,7 +419,7 @@ fn validate_git_repo_path(path: &Path) -> Result<PathBuf, ScanRuntimeError> {
 
     if canonical_input != canonical_toplevel {
         return Err(ScanRuntimeError::InvalidPath {
-            source: "git",
+            origin: "git",
             path: path.to_path_buf(),
             message: format!(
                 "path is inside a git repository but is not the repository root (root is '{}')",

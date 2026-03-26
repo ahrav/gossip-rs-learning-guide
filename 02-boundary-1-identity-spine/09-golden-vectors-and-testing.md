@@ -559,4 +559,4 @@ graph TD
 
 **Key takeaway:** Golden vectors + property tests + unit tests = comprehensive coverage. Any breaking change fails at least one test.
 
-**Next chapter:** Version Migration -- what triggers a version bump, blast radius, and migration procedure.
+**Next section:** [Chapter 03: Distributed Systems Theory](../03-distributed-systems-theory/01-impossibility-results.md) -- the theoretical foundations for coordination.
