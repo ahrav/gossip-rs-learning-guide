@@ -148,7 +148,7 @@ pub struct SimContext {
 
 ## Simulator Architecture
 
-The simulation infrastructure lives in `crates/gossip-coordination/src/sim/` and is organized into five layers (the source module `mod.rs` combines `SimContext` and `FaultConfig` into a single layer; here they are presented separately for pedagogical clarity):
+The simulation infrastructure lives in `crates/gossip-coordination/src/sim/` (20 files) and is organized into six layers (the source module `mod.rs` combines `SimContext` and `FaultConfig` into a single layer; here they are presented separately for pedagogical clarity):
 
 ```mermaid
 graph TD
@@ -159,6 +159,7 @@ graph TD
     E["InvariantChecker<br/>(S1-S9 external verification)"] --> D
     F["SimulationBackend<br/>(InMemoryCoordinator)"] --> D
     G["OverloadScenario<br/>(Scripted stress scenarios)"] --> D
+    H["Composition<br/>(Multi-component simulation)"] --> D
 ```
 
 ### Layer 1: SimContext -- PRNG and Logical Clock
@@ -646,6 +647,9 @@ The simulation infrastructure is fully implemented and exercised in CI:
 | `CoordinationSim` (3-phase harness) | Complete | `sim/harness.rs` |
 | `SimulationBackend` trait | Complete | `sim/backend.rs` |
 | `FaultInjectingIntrospector` | Complete | `sim/fault_injector.rs` |
+| Composition simulation (multi-component) | Complete | `sim/composition.rs` |
+| Composition invariants | Complete | `sim/composition_invariants.rs` |
+| Persistence sim harness (oracle, invariants) | Complete | `gossip-persistence-inmemory/src/sim/` |
 | Mega sim sweep (100+ seeds) | Complete | `sim/mega_sim_tests.rs` |
 | Proptest convergence (200 cases) | Complete | `sim/mega_sim_tests.rs` |
 | Behavioral regression suite | Complete | `sim/sim_behavioral_tests.rs` |

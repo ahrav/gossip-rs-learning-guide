@@ -222,36 +222,50 @@ Errors are organized by pipeline stage. Early stages fail fast; later stages pro
 
 ```rust
 /// Git scan error taxonomy.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum GitScanError {
     /// Repo open phase failed (bad metadata, missing refs, etc.).
-    RepoOpen(RepoOpenError),
+    #[error("{0}")]
+    RepoOpen(#[from] RepoOpenError),
     /// Commit plan construction failed.
-    CommitPlan(CommitPlanError),
+    #[error("{0}")]
+    CommitPlan(#[from] CommitPlanError),
     /// Tree diff walker encountered an error.
-    TreeDiff(TreeDiffError),
+    #[error("{0}")]
+    TreeDiff(#[from] TreeDiffError),
     /// Spill/dedupe pipeline error (I/O failure on spill files).
-    Spill(SpillError),
+    #[error("{0}")]
+    Spill(#[from] SpillError),
     /// MIDX parsing or validation error (corrupt header, missing packs).
-    Midx(MidxError),
+    #[error("{0}")]
+    Midx(#[from] MidxError),
     /// Pack plan construction error (out-of-range pack IDs, corrupt headers).
-    PackPlan(PackPlanError),
+    #[error("{0}")]
+    PackPlan(#[from] PackPlanError),
     /// Fatal pack execution error (decode failure that aborted a plan).
-    PackExec(PackExecError),
+    #[error("{0}")]
+    PackExec(#[from] PackExecError),
     /// Pack I/O error during loose object or cross-pack base resolution.
-    PackIo(PackIoError),
+    #[error("{0}")]
+    PackIo(#[from] PackIoError),
     /// Persistence store write failed.
-    Persist(PersistError),
+    #[error("{0}")]
+    Persist(#[from] PersistError),
     /// Underlying I/O error not covered by a more specific variant.
-    Io(io::Error),
+    #[error("{0}")]
+    Io(#[from] io::Error),
     /// Resource limit exceeded (pack mmap counts or cumulative bytes).
+    #[error("resource limit exceeded: {0}")]
     ResourceLimit(String),
     /// Scan mode not yet implemented.
+    #[error("scan mode not implemented: {0}")]
     UnsupportedMode(GitScanMode),
     /// In-memory artifact construction failed (MIDX or commit-graph build).
-    ArtifactAcquire(ArtifactAcquireError),
+    #[error("artifact acquisition failed: {0}")]
+    ArtifactAcquire(#[from] ArtifactAcquireError),
     /// Pack files or indices changed during the scan — a concurrent `git gc`
     /// or `git repack` invalidated the planned offsets. Callers should retry.
+    #[error("concurrent git maintenance detected; artifacts changed during scan")]
     ConcurrentMaintenance,
 }
 ```

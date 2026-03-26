@@ -19,9 +19,9 @@ Engineers who want to understand distributed systems design through a concrete, 
 | Boundary | Name | Status | Implementation Details |
 |----------|------|--------|------------------------|
 | B1 | Identity & Hashing Spine | ✅ Fully Implemented | 11 files, 48 invariants, 9 golden vectors, zero unsafe code |
-| B2 | Coordination | ✅ Fully Implemented | 25 source files + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (14 sim modules), etcd production backend, TLA+ spec, ~35K lines |
+| B2 | Coordination | ✅ Fully Implemented | 46 source files (26 core + 20 sim) + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (20 sim modules including composition), etcd production backend, TLA+ spec, ~35K lines |
 | B3 | Shard Algebra | ✅ Fully Implemented | 7 source files in gossip-frontier crate, key encoding, hint metadata, builder |
-| B4 | Connector | ✅ Fully Implemented | 5 contract files, 11 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, scan-driver adapter, 8 guide chapters |
+| B4 | Connector | ✅ Fully Implemented | 10 contract files (6 source + 4 test), 10 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, 7 guide chapters |
 | B5 | Persistence | ✅ Fully Implemented | Contract traits + in-memory test doubles + PostgreSQL backends (gossip-done-ledger-postgres, gossip-findings-postgres, gossip-pg-common), conformance harness |
 | — | Scanner Engine | ✅ Extracted | Detection engine: rule loading, content policy, scan engine, reusable scratch |
 | — | Scanner Git | ✅ Extracted | Git scanning pipeline: repo open, commit walk, tree diff, pack decode, blob spill |
@@ -38,7 +38,7 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 2. **01-foundations** — Core concepts: hashing, content addressing, state machines
 3. **02-boundary-1** — Identity & Hashing Spine (B1)
 4. **03-distributed-theory** — Coordination primitives: leases, fencing, idempotency
-5. **04-boundary-2** — Coordination (B2), split protocol (12 chapters)
+5. **04-boundary-2** — Coordination (B2), split protocol (14 chapters)
 6. **05-boundary-3** — Shard Algebra (B3), key encoding, hint metadata, builder (7 chapters)
 7. **06-boundary-4** — Connector (B4), toxic byte wrappers, split/read/capability methods, circuit breaker design, in-memory and filesystem connectors, git connector (7 chapters)
 8. **07-boundary-5** — Persistence (B5), done ledger, findings sink, commit protocol, in-memory test doubles, PostgreSQL backends, conformance harness (6 chapters)
@@ -93,10 +93,10 @@ Focus on Chapter 03 (distributed theory) and Chapter 07 (testing strategy) to un
 
 ## Documentation Stats
 
-- **106 guide chapters** across 15 sections (prologue through scanner runtime)
+- **101 guide chapters** across 14 sections (prologue through scanner runtime)
 - **30+ academic papers** referenced with inline citations
 - **70+ Mermaid diagrams** showing data flow, state machines, and system interactions
-- **Direct code references** to actual implementation across 17 workspace crates including `crates/gossip-contracts/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`, `crates/gossip-connectors/`, `crates/gossip-frontier/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`, `crates/gossip-pg-common/`, `crates/scanner-engine/`, `crates/scanner-git/`, `crates/scanner-scheduler/`, `crates/gossip-scanner-runtime/`, `crates/gossip-worker/`, and `crates/scanner-rs-cli/`
+- **Direct code references** to actual implementation across 18 workspace crates including `crates/gossip-contracts/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`, `crates/gossip-connectors/`, `crates/gossip-frontier/`, `crates/gossip-orchestrator/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`, `crates/gossip-pg-common/`, `crates/scanner-engine/`, `crates/scanner-git/`, `crates/scanner-scheduler/`, `crates/gossip-scanner-runtime/`, `crates/gossip-worker/`, `crates/gossip-stdx/`, and `crates/scanner-rs-cli/`
 - **Safety and liveness invariants** with formal specifications across all implemented boundaries
 
 ## Navigation

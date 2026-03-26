@@ -396,45 +396,37 @@ impl IdHashMode {
 
 **Reference**: Chapter 02-02 (Hash Derivation Implementation)
 
-## 10. Error Enums with Display
+## 10. Error Enums with thiserror
 
-**What it is**: Enums for error types with human-readable descriptions.
+**What it is**: Enums for error types with derive-generated `Display` and `Error` impls.
 
-**Why use it**: Type-safe error handling, better error messages.
+**Why use it**: Type-safe error handling, human-readable messages with less boilerplate than hand-written impls.
 
 **Example**:
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IdentityInputError {
+    #[error("ConnectorTag must not be empty")]
     EmptyTag,
+    #[error("ConnectorTag must be at most 8 bytes, got {0}")]
     TagTooLong(usize),
+    #[error("ConnectorTag byte at index {index} is not ASCII graphic: 0x{byte:02X}")]
     NonGraphicByte {
         index: usize,
         byte: u8,
     },
+    #[error("ItemIdentityKey locator must not be empty")]
     EmptyLocator,
+    #[error("version bytes must not be empty")]
     EmptyVersionBytes,
 }
-
-impl Display for IdentityInputError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyTag => write!(f, "ConnectorTag must not be empty"),
-            Self::TagTooLong(len) => write!(f, "ConnectorTag must be at most 8 bytes, got {len}"),
-            Self::NonGraphicByte { index, byte } => {
-                write!(f, "ConnectorTag byte at index {index} is not ASCII graphic: 0x{byte:02X}")
-            }
-            Self::EmptyLocator => write!(f, "ItemIdentityKey locator must not be empty"),
-            Self::EmptyVersionBytes => write!(f, "version bytes must not be empty"),
-        }
-    }
-}
-
-impl std::error::Error for IdentityInputError {}
 ```
+
+The `thiserror::Error` derive generates `Display` and `Error` trait impls from the `#[error("...")]` attributes. Variants with `#[from]` get automatic `From` conversions for error propagation.
 
 **Where used in Gossip-rs**:
 - `IdentityInputError` (identity derivation errors)
+- `GitScanError` (git scan pipeline errors with `#[from]` conversions)
 - `CoordError` (coordination layer errors)
 - `ConnectorError` (connector errors)
 

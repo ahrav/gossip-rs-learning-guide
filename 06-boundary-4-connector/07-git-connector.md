@@ -26,7 +26,7 @@ wastes time and produces false positives. A Git-specific connector restricts
 enumeration to tracked files only, matching what a developer would see with
 `git status`.
 
-The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~514 lines)
+The `GitConnector` in `crates/gossip-connectors/src/git.rs` (~509 lines)
 provides enumeration and read methods. It indexes
 tracked files via `git ls-files -z`, produces paginated enumeration pages
 from a sorted in-memory snapshot, and serves content reads through

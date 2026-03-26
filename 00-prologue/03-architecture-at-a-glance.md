@@ -107,7 +107,7 @@ CoordinationFacade
 - **S8 (RunTerminalIrreversibility)**: Terminal run states (`Done`, `Failed`, `Cancelled`) never revert
 - **S9 (CooldownViolation)**: A worker must not claim twice within `cooldown_interval` ticks
 
-**Status**: ✅ **Fully implemented** (25 source files in gossip-coordination — 17 core + 8 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
+**Status**: ✅ **Fully implemented** (46 source files in gossip-coordination — 26 core + 20 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
 
 **Code**: `crates/gossip-contracts/src/coordination/` and `crates/gossip-coordination/`
 

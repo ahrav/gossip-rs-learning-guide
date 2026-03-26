@@ -8,7 +8,7 @@
 
 The in-memory connector from Chapter 5 proves that the enumeration contract works for items held entirely in process memory. Production scanners need a connector that reads files from disk. This introduces three problems the in-memory connector does not face: symlinks can escape the scan root, filesystem state can change between enumeration and reading (TOCTOU), and the directory walk itself can be expensive enough to blow deadlines.
 
-The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` (~1,233 lines) solves all three. It provides read and split-point methods over a rooted directory tree, applying component-by-component `openat` with `O_NOFOLLOW` at every step for symlink-resistant read confinement. The connector integrates a `StreamingSplitEstimator` for byte-weighted split hints fed during enumeration.
+The `FilesystemConnector` in `crates/gossip-connectors/src/filesystem.rs` (~1,233 lines) solves all three. It provides read and split-point methods over a rooted directory tree, applying component-by-component `openat` with `O_NOFOLLOW` at every step for symlink-resistant read confinement. The connector integrates a `StreamingSplitEstimator` for byte-weighted split hints, though the capability is advertised as `split_hints: false` because the enumeration path does not feed observations into the estimator. The split-point API is available for external callers via `choose_split_point`.
 
 > **Platform availability:** `FilesystemConnector` is only available on Unix
 > (`#[cfg(unix)]`). The module relies on Unix-specific APIs: `openat` with

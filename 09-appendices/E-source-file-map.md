@@ -73,7 +73,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 #### gossip-coordination Simulation Harness
 
-`crates/gossip-coordination/src/sim/` (17 files)
+`crates/gossip-coordination/src/sim/` (20 files)
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
@@ -92,6 +92,9 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/sim/overload.rs` | 08-05 | Overload simulation scenarios |
 | `crates/gossip-coordination/src/sim/overload_tests.rs` | 08-05 | Overload simulation tests |
 | `crates/gossip-coordination/src/sim/composition.rs` | 08-05 | Simulation composition utilities |
+| `crates/gossip-coordination/src/sim/composition_tests.rs` | 08-05 | Composition simulation tests |
+| `crates/gossip-coordination/src/sim/composition_invariants.rs` | 08-05 | Composition invariant checks |
+| `crates/gossip-coordination/src/sim/composition_invariants_tests.rs` | 08-05 | Composition invariant tests |
 | `crates/gossip-coordination/src/sim/scan_driver_sim.rs` | 08-05 | Simulated scan driver for DST |
 | `crates/gossip-coordination/src/sim/shared.rs` | 08-05 | Shared simulation types and helpers |
 
@@ -168,7 +171,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 
 ### gossip-persistence-inmemory (Boundary 5 — in-memory backend)
 
-`crates/gossip-persistence-inmemory/src/` (7 files)
+`crates/gossip-persistence-inmemory/src/` (7 files + `sim/` subdirectory with 5 files)
 
 In-memory reference persistence backends for tests and deterministic simulation. Implements the same monotonic lattice merge semantics and idempotent write contracts required of production backends, including explicit durability acknowledgement via `CommitHandle::wait()`.
 
@@ -182,9 +185,21 @@ In-memory reference persistence backends for tests and deterministic simulation.
 | `crates/gossip-persistence-inmemory/src/error.rs` | 07-05 | Persistence error types for in-memory backend |
 | `crates/gossip-persistence-inmemory/src/tests.rs` | 07-05 | Integration and behavioral tests |
 
+#### gossip-persistence-inmemory Simulation Harness
+
+`crates/gossip-persistence-inmemory/src/sim/` (5 files)
+
+| Source File | Primary Chapters | Topics |
+|------------|------------------|---------|
+| `crates/gossip-persistence-inmemory/src/sim/mod.rs` | 07-05, 08-05 | Simulation module structure |
+| `crates/gossip-persistence-inmemory/src/sim/harness.rs` | 07-05, 08-05 | Persistence simulation harness |
+| `crates/gossip-persistence-inmemory/src/sim/invariants.rs` | 07-05, 08-05 | Persistence invariant checks |
+| `crates/gossip-persistence-inmemory/src/sim/oracle.rs` | 07-05, 08-05 | Test oracle for persistence |
+| `crates/gossip-persistence-inmemory/src/sim/tests.rs` | 07-05, 08-05 | Persistence simulation tests |
+
 ### gossip-done-ledger-postgres (Boundary 5 — Postgres done-ledger)
 
-`crates/gossip-done-ledger-postgres/src/` (8 files)
+`crates/gossip-done-ledger-postgres/src/` (8 files + `tests/` subdirectory)
 
 Postgres-backed done-ledger implementing the `DoneLedger` trait with the same monotonic lattice merge semantics as the in-memory backend. Production persistence backend for tracking scanned-item status.
 
@@ -198,10 +213,11 @@ Postgres-backed done-ledger implementing the `DoneLedger` trait with the same mo
 | `crates/gossip-done-ledger-postgres/src/types.rs` | 07-02 | Type conversions for Postgres |
 | `crates/gossip-done-ledger-postgres/src/tests.rs` | 07-05 | Integration tests |
 | `crates/gossip-done-ledger-postgres/src/test_postgres.rs` | 07-05 | Postgres test utilities |
+| `crates/gossip-done-ledger-postgres/src/tests/merge_parity_proptest.rs` | 07-02 | Merge parity property tests |
 
 ### gossip-findings-postgres (Boundary 5 — Postgres findings sink)
 
-`crates/gossip-findings-postgres/src/` (9 files)
+`crates/gossip-findings-postgres/src/` (9 files + `tests/` subdirectory)
 
 Postgres-backed findings sink implementing the `FindingsSink` trait. Production persistence backend for writing detection findings durably.
 
@@ -216,6 +232,7 @@ Postgres-backed findings sink implementing the `FindingsSink` trait. Production 
 | `crates/gossip-findings-postgres/src/types.rs` | 07-03 | Type conversions for Postgres |
 | `crates/gossip-findings-postgres/src/tests.rs` | 07-05 | Integration tests |
 | `crates/gossip-findings-postgres/src/test_postgres.rs` | 07-05 | Postgres test utilities |
+| `crates/gossip-findings-postgres/src/tests/merge_parity_proptest.rs` | 07-03 | Merge parity property tests |
 
 ### gossip-pg-common (Boundary 5 — shared Postgres utilities)
 

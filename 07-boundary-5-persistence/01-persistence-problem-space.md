@@ -354,6 +354,28 @@ AwaitingFindings ──record_findings──▸ FindingsDurable
                                   CheckpointDurable
 ```
 
+`CheckpointBoundary` is a family-neutral enum that tags each checkpoint with its source family:
+
+From `page_commit.rs`:
+
+```rust
+pub enum CheckpointBoundaryKind {
+    /// Ordered-content item frontier.
+    OrderedContent,
+    /// Repo-frontier progress (e.g., Git repos).
+    RepoFrontier,
+}
+
+pub enum CheckpointBoundary {
+    /// Ordered-content checkpoint boundary.
+    OrderedContent(Cursor),
+    /// Repo-frontier checkpoint boundary.
+    RepoFrontier(Cursor),
+}
+```
+
+Both variants wrap a [`Cursor`] because ordered-content and repo-frontier source families both reduce to a monotonic frontier position plus optional opaque token. The enum tag carries the semantic domain so runtime code cannot accidentally mix them.
+
 From `page_commit.rs`:
 
 ```rust
