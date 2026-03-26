@@ -460,8 +460,11 @@ For root-semantic findings, offline validation runs a deterministic, network-fre
 ```rust
 pub(crate) fn validate(spec: OfflineValidationSpec, secret: &[u8]) -> OfflineVerdict {
     match spec {
-        OfflineValidationSpec::Crc32Base62 { .. } =>
-            validate_crc32_base62(secret, prefix_skip, payload_len, checksum_len),
+        OfflineValidationSpec::Crc32Base62 {
+            prefix_skip,
+            payload_len,
+            checksum_len,
+        } => validate_crc32_base62(secret, prefix_skip, payload_len, checksum_len),
         OfflineValidationSpec::GithubFinegrainedPat => validate_github_fine_grained_pat(secret),
         OfflineValidationSpec::GrafanaServiceAccount => validate_grafana_service_account(secret),
         OfflineValidationSpec::AwsAccessKey => validate_aws_access_key(secret),

@@ -438,7 +438,7 @@ Three error types cover the failure modes across encode, hint-decode, and metada
 Here is `ShardHintDecodeError` from `hint.rs`:
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShardHintDecodeError {
     /// Input is empty where a hint tag is required.
     EmptyData,
@@ -472,7 +472,7 @@ This is a struct, not an enum. When `hint_error` is `Some`, the envelope parsed 
 Here is `ShardEncodeError` from `hint.rs`:
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ShardEncodeError {
     /// Prefix bytes exceed `u32` framing width.

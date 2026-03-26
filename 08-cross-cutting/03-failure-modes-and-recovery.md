@@ -101,19 +101,16 @@ The coordinator process crashes or becomes unreachable.
 - All lease assignments (in DB)
 - All op-log entries (in DB)
 
-**Recovery**:
+**Recovery** (simplified pseudocode — actual recovery logic is backend-specific):
 ```rust
 // On coordinator restart
 let coordinator = Coordinator::new(persistent_backend);
 
 // Rebuild in-memory state from backend
-let runs = coordinator.list_active_runs()?;
-for run in runs {
-    // Check for expired leases
-    let expired = coordinator.find_expired_leases(run.id, LogicalTime::now())?;
-    for shard_id in expired {
-        coordinator.release_lease(run.id, shard_id)?;
-    }
+let runs = coordinator.list_active_runs_into(&mut buf)?;
+for run in &runs {
+    // Check for expired leases (lease TTL handles this automatically
+    // on the next acquire_and_restore_into call for the shard)
 }
 
 // Coordinator is now operational

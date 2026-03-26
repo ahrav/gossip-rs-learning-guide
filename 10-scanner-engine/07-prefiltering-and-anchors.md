@@ -219,6 +219,8 @@ pub struct RunLengthGate {
     pub max_len: Option<u32>,
     /// ASCII boundary handling applied around the run.
     pub boundary: Boundary,
+    /// Optional minimum entropy threshold for the run span.
+    pub min_entropy: Option<f32>,
     /// Whether to also scan UTF-16LE/BE ASCII forms.
     pub scan_utf16_variants: bool,
 }

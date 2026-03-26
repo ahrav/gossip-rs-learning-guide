@@ -218,7 +218,7 @@ The enum is `Copy` and carries no data beyond its discriminant. It serves purely
 Here is the definition from `hint.rs`:
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum HintPropagationError {
     /// Prefix child boundary falls outside the parent prefix range.

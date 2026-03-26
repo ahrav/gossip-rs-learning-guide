@@ -612,7 +612,7 @@ The mapping itself translates a decoded-byte span back to absolute root-buffer c
 
 The engine's total memory footprint per worker thread is deterministic and calculable before the first scan. The budget breaks down into three categories:
 
-**Compilation-time (shared).** The `Engine` struct is immutable and shared across all workers via `Arc<Engine>`. Its cost is proportional to the rule count and anchor pattern count: `rules_hot` (88 bytes per rule), `rules_cold` (24 bytes per rule), up to eight gate pools (variable, but bounded by rule count), five Vectorscan databases (sized by pattern complexity), and the base64 YARA pre-gate.
+**Compilation-time (shared).** The `Engine` struct is immutable and shared across all workers via `Arc<Engine>`. Its cost is proportional to the rule count and anchor pattern count: `rules_hot` (88 bytes per rule), `rules_cold` (56 bytes per rule), up to eight gate pools (variable, but bounded by rule count), five Vectorscan databases (sized by pattern complexity), and the base64 YARA pre-gate.
 
 **Per-worker (fixed).** Each `ScanScratch` instance has a fixed memory envelope determined by the `Tuning` struct:
 

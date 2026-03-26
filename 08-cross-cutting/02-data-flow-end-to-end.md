@@ -104,8 +104,8 @@ let report = runtime.scan_shard(
 
 ```rust
 // For each item, derive StableItemId (B1)
-// StableItemId is TENANT-INDEPENDENT — derived from connector tag + locator only.
-let item_identity = ItemIdentityKey::new(connector_tag, &item_locator);
+// StableItemId is TENANT-INDEPENDENT — derived from connector tag + instance + locator.
+let item_identity = ItemIdentityKey::new(connector_tag, connector_instance_hash, &item_locator);
 let stable_id = item_identity.stable_id();
 ```
 
@@ -155,12 +155,12 @@ let content = connector.read_item(item_key)?;
 // Run detection engine (not shown: separate boundary)
 let findings = detection_engine.scan(content, policy)?;
 
-// For each finding, derive NormHash (B1)
+// For each finding, the detection engine has already computed a NormHash:
+// a 32-byte digest of the normalized (whitespace-stripped, case-folded)
+// secret value. The contracts crate constructs it via:
+//     NormHash::from_digest(engine_computed_digest)
 for finding in findings {
-    let norm_hash = NormHash::derive(NormHashInputs {
-        finding_type: finding.rule_type,
-        normalized_match: finding.normalized_value,
-    });
+    let norm_hash = NormHash::from_digest(finding.normalized_digest);
 
     // Store for next step
     finding_data.push((finding, norm_hash));
@@ -173,9 +173,9 @@ for finding in findings {
 - Return content with metadata
 
 **Boundary 1 responsibilities** (NormHash):
-- Normalize match value (case-folding, whitespace removal)
-- Derive content-addressed hash
-- Domain-separate from other hash types
+- Accept the pre-computed 32-byte digest from the detection engine via `NormHash::from_digest`
+- Provide redacted `Debug` impl (no accidental logging of secret material)
+- Domain-separate from other hash types via the restricted constructor
 
 **Guarantees**:
 - Content is read exactly once per item
@@ -415,7 +415,7 @@ sequenceDiagram
 
             loop For each finding
                 Note over W,B1: Step 7: Derive Identities
-                W->>B1: NormHash::derive(finding_type, normalized_match)
+                W->>B1: NormHash::from_digest(engine_computed_digest)
                 B1-->>W: NormHash
                 W->>B1: key_secret_hash(tenant_key, norm_hash)
                 B1-->>W: SecretHash
@@ -458,7 +458,7 @@ sequenceDiagram
 
 | Step | Boundary | Input | Output | Guarantee |
 |------|----------|-------|--------|-----------|
-| 1 | B2 | RunManifest | RunId, ShardRecords | Durable manifest |
+| 1 | B2 | RunConfig | RunId, ShardRecords | Durable run state |
 | 2 | B2 | WorkerId, RunId | AcquireResultView, FenceEpoch | Exclusive lease |
 | 3 | B4 | ShardRange, Assignment | ScanReport | Scanned items within shard |
 | 4 | B1 | ItemKey, Connector | StableItemId | Cross-run stability (tenant-independent) |

@@ -91,49 +91,52 @@ impl PageCommit<Sealed> {
 
 **Reference**: Chapter 07 (Persistence and Page Commits)
 
-## 3. Builder Pattern (Future)
+## 3. Builder Pattern (Pedagogical)
 
 **What it is**: Constructing complex objects step by step, validating as you go.
 
-**Example** (not yet in codebase):
+> **Note**: Gossip-rs currently uses validated constructors (e.g., `RunConfig::try_new`)
+> rather than builder structs. This example illustrates the pattern conceptually;
+> the types shown are pedagogical pseudocode, not real crate types.
+
+**Example** (pedagogical pseudocode — not in codebase):
 ```rust
-pub struct RunManifestBuilder {
-    tenant_id: Option<TenantId>,
-    policy_hash: Option<PolicyHash>,
-    connector_tag: Option<ConnectorTag>,
+pub struct WidgetConfigBuilder {
+    name: Option<String>,
+    max_retries: Option<u32>,
+    timeout: Option<Duration>,
 }
 
-impl RunManifestBuilder {
+impl WidgetConfigBuilder {
     pub fn new() -> Self { /* ... */ }
 
-    pub fn tenant(mut self, tenant: TenantId) -> Self {
-        self.tenant_id = Some(tenant);
+    pub fn name(mut self, name: String) -> Self {
+        self.name = Some(name);
         self
     }
 
-    pub fn policy(mut self, policy: PolicyHash) -> Self {
-        self.policy_hash = Some(policy);
+    pub fn max_retries(mut self, n: u32) -> Self {
+        self.max_retries = Some(n);
         self
     }
 
-    pub fn build(self) -> Result<RunManifest> {
-        Ok(RunManifest {
-            tenant_id: self.tenant_id.ok_or(Error::MissingTenant)?,
-            policy_hash: self.policy_hash.ok_or(Error::MissingPolicy)?,
+    pub fn build(self) -> Result<WidgetConfig, ConfigError> {
+        Ok(WidgetConfig {
+            name: self.name.ok_or(ConfigError::MissingName)?,
+            max_retries: self.max_retries.unwrap_or(3),
             // ...
         })
     }
 }
 
 // Usage:
-let manifest = RunManifestBuilder::new()
-    .tenant(tenant_id)
-    .policy(policy_hash)
-    .connector(ConnectorTag::GitHub)
+let config = WidgetConfigBuilder::new()
+    .name("scanner".into())
+    .max_retries(5)
     .build()?;
 ```
 
-**Where planned**: Run manifest construction, connector configuration.
+**Current codebase approach**: `RunConfig::try_new(cursor_semantics, lease_duration, max_shard_retries)` validates inputs in a single constructor call rather than using a builder.
 
 **Benefits**:
 - Fluent API (readable)
@@ -600,7 +603,7 @@ Gossip-rs uses 15 Rust patterns strategically:
 |---------|-----------------|---------------|
 | Newtype | Type safety | `TenantId`, `FindingId`, all IDs |
 | Typestate | Compile-time state machine | `PageCommit<S>` |
-| Builder | Fluent construction | (future: `RunManifest`) |
+| Builder | Fluent construction | (pedagogical example) |
 | Macros | Reduce boilerplate | `define_id_32!`, `define_id_64!` |
 | Feature flags | Test/prod separation | `#[cfg(feature = "test-support")]` |
 | Proptest | Universal properties | All identity tests |

@@ -51,9 +51,10 @@ pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorErr
         connect_opts = connect_opts.with_user(user, password);
     }
 
-    debug_assert!(
+    assert!(
         tokio::runtime::Handle::try_current().is_err(),
-        "connect() must not be called from within an active Tokio runtime"
+        "EtcdCoordinator::connect() must not be called from within an active Tokio runtime \
+         — use AsyncEtcdCoordinator::connect() instead"
     );
 
     let mut client = runtime
@@ -82,7 +83,7 @@ pub fn connect(config: EtcdCoordinatorConfig) -> Result<Self, EtcdCoordinatorErr
 }
 ```
 
-The `debug_assert` on `Handle::try_current` catches a lethal bug at development time: calling `block_on` from inside an existing Tokio runtime deadlocks the current thread. The assertion fires only in debug builds, keeping production overhead at zero. The two-phase pattern — connect, then status — ensures that a successful `connect()` return means the cluster responded to at least one RPC. A backend that only connects but never verifies could mask a firewall rule that blocks the etcd port but allows the TCP handshake.
+The `assert!` on `Handle::try_current` catches a lethal bug: calling `block_on` from inside an existing Tokio runtime deadlocks the current thread. The assertion fires in all builds (debug and release), preventing this class of deadlock from reaching production. The two-phase pattern — connect, then status — ensures that a successful `connect()` return means the cluster responded to at least one RPC. A backend that only connects but never verifies could mask a firewall rule that blocks the etcd port but allows the TCP handshake.
 
 ## Internal Persistence Types
 

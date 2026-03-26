@@ -598,7 +598,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `diagrams/12-split-operations.md` (split diagram)
 
 - **04-07: Run Lifecycle**
-  - `crates/gossip-coordination/src/run.rs` (RunManifest, run lifecycle)
+  - `crates/gossip-coordination/src/run.rs` (RunConfig, run lifecycle)
   - `diagrams/05-shard-and-run-state-machines.md` (run state machine)
 
 - **04-08: Coordination Trait**
