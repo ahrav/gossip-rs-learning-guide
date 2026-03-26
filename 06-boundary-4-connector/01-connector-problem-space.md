@@ -80,7 +80,7 @@ trait surface in `connector::git`. The contract types in `api.rs`
 (`ConnectorCapabilities`, `EnumerateError`, `ReadError`) define the shared
 vocabulary that all connectors use.
 
-Three methods define the enumeration surface:
+Two methods define the planning surface:
 
 - **`pub fn caps(&self) -> ConnectorCapabilities`** -- A static declaration
   of what the connector supports. Orchestration queries this at registration
@@ -327,19 +327,24 @@ types. This one-way dependency means changing a connector's value types does
 not recompile the coordination module, and changing coordination's internal
 state machine does not recompile the connector contracts.
 
-The `api.rs` module makes this dependency explicit in its imports:
+The `ordered.rs` module makes this dependency explicit in its imports:
 
 ```rust
 use crate::coordination::ShardSpec;
 
-use super::{Budgets, Cursor, ItemKey, ItemRef};
+use super::common::PageBuf;
+use super::{Budgets, Cursor, EnumerateError, ItemKey, ItemRef, ReadError, ScanItem};
 ```
 
 `ShardSpec` comes from the coordination module. Everything else comes from
-the sibling `types` module via `super::`. The connector module reaches into
+the sibling modules via `super::`. The connector module reaches into
 coordination for exactly one type -- the shard specification that defines what
 range a connector enumerates within. It does not reach into coordination for
 leases, fencing tokens, run status, or any other state machine concerns.
+Note that `api.rs` itself has no imports from coordination or sibling
+connector modules -- it imports only `std::fmt`. The cross-boundary dependency
+surfaces in the family modules (`ordered.rs`, `git.rs`) that define trait
+methods accepting `ShardSpec` parameters.
 
 ---
 

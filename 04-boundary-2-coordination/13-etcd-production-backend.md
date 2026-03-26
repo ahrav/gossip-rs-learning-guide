@@ -658,24 +658,44 @@ Nine variants cover the full surface of etcd interactions. `Connect` and `Status
 From `error.rs`:
 
 ```rust
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EtcdCoordinatorError {
-    Config(EtcdCoordinatorConfigError),
-    Keyspace(EtcdKeyspaceError),
-    RuntimeBuild(std::io::Error),
+    /// Invalid [`EtcdCoordinatorConfig`](crate::EtcdCoordinatorConfig) parameters.
+    #[error("invalid etcd coordinator config: {0}")]
+    Config(#[from] EtcdCoordinatorConfigError),
+    /// Invalid [`EtcdKeyspace`](crate::EtcdKeyspace) prefix.
+    #[error("invalid etcd keyspace: {0}")]
+    Keyspace(#[from] EtcdKeyspaceError),
+    /// Failed to build the internal single-threaded Tokio runtime.
+    #[error("failed to build tokio runtime: {0}")]
+    RuntimeBuild(#[source] std::io::Error),
+    /// A v1 blob failed to encode or decode during the given operation.
+    #[error("etcd {operation} codec operation failed: {source}")]
     Codec {
         operation: EtcdOperation,
+        #[source]
         source: EtcdCodecError,
     },
+    /// An etcd gRPC call failed during the given operation.
+    #[error("etcd {operation} operation failed: {source}")]
     Etcd {
         operation: EtcdOperation,
+        #[source]
         source: etcd_client::Error,
+    },
+    /// A simulated etcd operation failed during the given operation.
+    #[cfg(any(test, feature = "test-support"))]
+    #[error("simulated etcd {operation} operation failed: {source}")]
+    Simulated {
+        operation: EtcdOperation,
+        #[source]
+        source: SimEtcdError,
     },
 }
 ```
 
-Five variants form a progression that mirrors the backend's lifecycle:
+Six variants form a progression that mirrors the backend's lifecycle (the `Simulated` variant is only compiled in test builds):
 
 1. **`Config`** — validation failed before any I/O. The inner `EtcdCoordinatorConfigError` identifies which of the nine constraints was violated.
 2. **`Keyspace`** — the namespace prefix could not be converted into a valid keyspace builder.
@@ -685,25 +705,7 @@ Five variants form a progression that mirrors the backend's lifecycle:
 
 The `Codec` variant is a notable addition: because the backend implements coordination directly against etcd, codec failures can occur during any operation that reads or writes record blobs. The operation tag identifies whether the codec error happened during a `Get` (decode failure on a read), a `Put` (encode failure before a write), or a `Txn` (decode or encode failure during a compare-and-swap).
 
-`From` impls enable `?` propagation from config validation and keyspace construction:
-
-From `error.rs`:
-
-```rust
-impl From<EtcdCoordinatorConfigError> for EtcdCoordinatorError {
-    fn from(value: EtcdCoordinatorConfigError) -> Self {
-        Self::Config(value)
-    }
-}
-
-impl From<EtcdKeyspaceError> for EtcdCoordinatorError {
-    fn from(value: EtcdKeyspaceError) -> Self {
-        Self::Keyspace(value)
-    }
-}
-```
-
-The full `Error` trait implementation chains sources properly, so `anyhow` and `eyre` can walk the error chain for diagnostics. Every variant reports its inner error through `source()`, producing stack traces like "etcd lease_grant operation failed: connection refused" that pinpoint the exact failure without requiring a debugger.
+The `#[from]` attributes on `Config` and `Keyspace` generate `From` impls, enabling `?` propagation from config validation and keyspace construction. The `#[source]` attributes on `RuntimeBuild`, `Codec`, `Etcd`, and `Simulated` chain error sources properly, so `anyhow` and `eyre` can walk the error chain for diagnostics. Every variant reports its inner error through `source()`, producing stack traces like "etcd lease_grant operation failed: connection refused" that pinpoint the exact failure without requiring a debugger. `Display` and `Error` are derived automatically by `thiserror::Error`; there are no manual trait impls.
 
 ## The Public API Surface
 

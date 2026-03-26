@@ -233,7 +233,7 @@ Here is the `define_connector_error!` macro from `api.rs`:
 
 ```rust
 /// Generates a connector error type with private fields, named constructors,
-/// accessors, and trait impls (`Display`, `Error`).
+/// accessors, and trait impls (`Display`, `Debug`, `Error`).
 ///
 /// Each invocation produces a distinct nominal type with identical structure,
 /// preserving type safety between different connector operations (see module
@@ -246,14 +246,16 @@ Here is the `define_connector_error!` macro from `api.rs`:
 /// Generated API surface per type:
 /// - Accessors: `class()`, `message()`, `retry_after_ms()`, `is_retryable()`, `into_message()`
 /// - Constructors: `retryable()`, `rate_limited()`, `permanent()`
-/// - Traits: `Clone`, `Debug`, `PartialEq`, `Eq`, `Display`, `Error`
+/// - Traits: `Clone`, `PartialEq`, `Eq`, `Display`, `Debug` (hand-written, redacts message), `Error`
+#[macro_export]
+#[doc(hidden)]
 macro_rules! define_connector_error {
     (
         $(#[$meta:meta])*
         $name:ident
     ) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $name {
             class: ErrorClass,
             message: String,
@@ -356,6 +358,23 @@ macro_rules! define_connector_error {
                     write!(f, " (retry_after_ms={})", retry_after_ms)?;
                 }
                 Ok(())
+            }
+        }
+
+        /// `Debug` redacts the message through `ToxicDigest` so raw
+        /// connector-originated text never appears in debug output. This
+        /// prevents accidental secret leakage via `{:?}` formatting in
+        /// error chains or `Option<EnumerateError>` debug rendering.
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct(stringify!($name))
+                    .field("class", &self.class)
+                    .field(
+                        "message",
+                        &ToxicDigest::of_bytes(self.message.as_bytes()),
+                    )
+                    .field("retry_after_ms", &self.retry_after_ms)
+                    .finish()
             }
         }
 
@@ -477,7 +496,8 @@ Here is the sanitization function from `api.rs`:
 /// these ranges form the full set for which [`char::is_control()`] returns
 /// `true`.
 #[inline]
-fn fmt_sanitized_message(f: &mut fmt::Formatter<'_>, message: &str) -> fmt::Result {
+#[doc(hidden)]
+pub fn fmt_sanitized_message(f: &mut fmt::Formatter<'_>, message: &str) -> fmt::Result {
     for ch in message.chars() {
         if ch.is_control() && !matches!(ch, '\t' | '\n' | '\r') {
             f.write_str("\u{FFFD}")?;
@@ -488,6 +508,10 @@ fn fmt_sanitized_message(f: &mut fmt::Formatter<'_>, message: &str) -> fmt::Resu
     Ok(())
 }
 ```
+
+The function is `pub` with `#[doc(hidden)]` because the `define_connector_error!`
+macro is `#[macro_export]` and needs to call it from other crates via the
+`$crate::connector::fmt_sanitized_message` path.
 
 Tabs, newlines, and carriage returns are preserved because they are
 legitimate whitespace in multi-line diagnostic messages. Everything else in

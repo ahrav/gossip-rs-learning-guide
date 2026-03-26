@@ -952,11 +952,13 @@ a single error enum.
 Here is the definition from `types.rs`:
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectorInputError {
     /// A required field was empty (zero-length byte slice).
+    #[error("{field} must not be empty")]
     Empty { field: &'static str },
     /// A field exceeded its hard size limit.
+    #[error("{field} too large ({size} bytes, max {max})")]
     TooLarge {
         field: &'static str,
         /// Actual byte length of the rejected input.
@@ -965,8 +967,10 @@ pub enum ConnectorInputError {
         max: usize,
     },
     /// Cursor update had `token` without `last_key`.
+    #[error("token must not be present without last_key")]
     TokenWithoutLastKey,
     /// A budget field was zero, which would make the budget vacuous.
+    #[error("{field} must be non-zero")]
     ZeroBudget { field: &'static str },
 }
 ```

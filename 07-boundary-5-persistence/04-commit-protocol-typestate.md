@@ -223,7 +223,7 @@ No validation is performed on the findings receipt. The findings sink is driven 
         let expected = self.scope.committed_units();
         let actual = receipt.record_count();
         if expected != actual {
-            return Err(PageCommitValidationError::LedgerItemCountMismatch { expected, actual });
+            return Err(PageCommitValidationError::LedgerUnitCountMismatch { expected, actual });
         }
 
         let item_commit = ItemCommitReceipt::new(self.scope.clone(), self.state.findings, receipt);
@@ -336,19 +336,24 @@ Callers that need finer retry control use `record_X` methods with a separately m
 ### PageCommitValidationError
 
 ```rust
-// From crates/gossip-contracts/src/persistence/page_commit.rs:169-175
-#[derive(Debug, Clone, PartialEq, Eq)]
+// From crates/gossip-contracts/src/persistence/page_commit.rs
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PageCommitValidationError {
-    LedgerItemCountMismatch { expected: u64, actual: u64 },
-    CheckpointScopeMismatch,
+    #[error("done-ledger unit count mismatch: expected {expected}, got {actual}")]
+    LedgerUnitCountMismatch { expected: u64, actual: u64 },
+    #[error("checkpoint scope mismatch")]
+    CheckpointScopeMismatch {
+        expected: Box<CommitScope>,
+        actual: Box<CommitScope>,
+    },
 }
 ```
 
 Two variants, each guarding a different invariant:
 
-- **`LedgerItemCountMismatch`** — The done-ledger receipt acknowledged a different number of records than the scope's `committed_units`. This catches partial flushes (the backend wrote 120 of 128 rows before confirming) and receipt mix-ups (a receipt from a 64-item page applied to a 128-item page).
+- **`LedgerUnitCountMismatch`** — The done-ledger receipt acknowledged a different number of records than the scope's `committed_units`. This catches partial flushes (the backend wrote 120 of 128 rows before confirming) and receipt mix-ups (a receipt from a 64-item page applied to a 128-item page).
 
-- **`CheckpointScopeMismatch`** — The checkpoint receipt's embedded scope does not match the page scope on at least one field. This catches every category of cross-page confusion: wrong tenant, wrong shard, wrong epoch, wrong cursor boundary.
+- **`CheckpointScopeMismatch`** — The checkpoint receipt's embedded scope does not match the page scope on at least one field. Carries both the expected and actual `CommitScope` (boxed for diagnostics). This catches every category of cross-page confusion: wrong tenant, wrong shard, wrong epoch, wrong cursor boundary.
 
 Both are deterministic — retrying with the same inputs produces the same error. These indicate programming errors or backend mis-routing bugs, not transient failures.
 

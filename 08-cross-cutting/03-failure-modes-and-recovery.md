@@ -199,7 +199,7 @@ sequenceDiagram
     Note over B4: Circuit breaker opens
     B4-->>W: CircuitBreakerOpen error
 
-    W->>B2: park_shard(reason: SourceUnreachable)
+    W->>B2: park_shard(reason: TooManyErrors)
     B2->>B2: Mark shard as parked
     Note over W: Worker stops scanning this shard
 ```
@@ -282,7 +282,7 @@ stateDiagram-v2
 2. Circuit breaker increments failure count
 3. After N failures → circuit breaker opens
 4. Subsequent requests fail fast (no actual API call)
-5. Worker parks shard with `ParkReason::SourceUnreachable`
+5. Worker parks shard with `ParkReason::TooManyErrors`
 6. Other connectors are unaffected (independent circuit breakers)
 
 **After cooldown period**:
@@ -303,9 +303,7 @@ match driver.run(engine, config, events, commits, cancel) {
             tenant,
             run_id,
             shard_id,
-            ParkReason::SourceUnreachable {
-                retry_after: cooldown_until,
-            },
+            ParkReason::TooManyErrors,
         )?;
 
         // Release lease
@@ -525,9 +523,10 @@ async fn network_partition_recovery() {
 
 ### Symptom: Shards are parked
 **Check**: `ParkReason` in shard records.
-- `SourceUnreachable`: Check source system health. Wait for cooldown, retry.
-- `CircuitBreakerOpen`: Check connector circuit breaker state. Investigate source errors.
-- `RateLimited`: Increase delay between requests or request rate limit increase from source.
+- `TooManyErrors`: Check source system health. Wait for cooldown, retry.
+- `PermissionDenied`: Check credentials and access configuration for the source.
+- `NotFound`: Verify the source resource still exists.
+- `Poisoned`: Shard encountered an unrecoverable state; investigate logs for the root cause.
 
 ### Symptom: Run is not completing
 **Check**: Shard states. Are any shards stuck?

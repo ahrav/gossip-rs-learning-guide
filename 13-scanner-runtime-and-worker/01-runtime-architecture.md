@@ -440,31 +440,61 @@ The runtime defines a structured error enum that captures context for every fail
 
 ```rust
 /// Runtime wiring errors for scan execution.
-#[derive(Debug)]
+///
+/// Covers the full lifecycle from path validation through engine construction
+/// and scan dispatch. Each variant carries enough context for a human-readable
+/// error message without requiring access to the original inputs.
+#[derive(Debug, thiserror::Error)]
 pub enum ScanRuntimeError {
+    /// A scan target path failed validation.
+    #[error("{origin} path '{}' invalid: {message}", path.display())]
     InvalidPath {
-        source: &'static str,
+        /// Which subsystem originated the path.
+        origin: &'static str,
+        /// The path that failed validation.
         path: PathBuf,
+        /// Human-readable reason for the failure.
         message: String,
     },
+    /// A `git` subprocess exited with a non-zero status.
+    #[error("git command failed for '{}' (status={status_code:?}): {stderr}", repo.display())]
     GitCommandFailed {
+        /// Repository path the command was invoked against.
         repo: PathBuf,
+        /// Process exit code, if available.
         status_code: Option<i32>,
+        /// Captured stderr output from the git process.
         stderr: String,
     },
+    /// An I/O operation failed during runtime setup.
+    #[error("{}", fmt_io_error(.op, .path.as_ref(), .error))]
     Io {
+        /// Short description of the operation.
         op: &'static str,
+        /// Associated file path, when applicable.
         path: Option<PathBuf>,
+        /// Underlying I/O error.
+        #[source]
         error: std::io::Error,
     },
+    /// The external rules configuration file could not be loaded or parsed.
+    #[error("{}", fmt_rules_config_error(.path.as_ref(), .message))]
     RulesConfig {
+        /// Path to the rules file, if one was specified.
         path: Option<PathBuf>,
+        /// Human-readable parse or load error.
         message: String,
     },
-    ConnectorInput(ConnectorInputError),
-    Driver(anyhow::Error),
+    /// A connector input parameter was invalid.
+    #[error("{0}")]
+    ConnectorInput(#[source] ConnectorInputError),
+    /// The family runtime returned an execution error.
+    #[error("runtime execution failed: {0}")]
+    Driver(#[source] anyhow::Error),
 }
 ```
+
+`Display` and `Error` are derived automatically by `thiserror::Error`. The `#[error("...")]` attributes use helper functions (`fmt_io_error`, `fmt_rules_config_error`) for complex formatting.
 
 Five structured variants plus one escape hatch:
 

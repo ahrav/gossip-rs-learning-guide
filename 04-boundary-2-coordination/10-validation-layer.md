@@ -475,20 +475,45 @@ operation error type accepts a subset of its variants via `From<CoordError>`
 impls:
 
 ```rust
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoordError {
+    /// The shard does not exist in the coordination store.
+    #[error("shard not found: {shard:?}")]
     ShardNotFound { shard: ShardKey },
+    /// Tenant isolation violation: the request's tenant does not match
+    /// the shard record's tenant.
+    #[error("tenant mismatch (expected {expected:?})")]
     TenantMismatch { expected: TenantId },
+    /// The lease's fence epoch does not match the record's current epoch.
+    #[error("stale fence epoch: presented {presented:?}, current {current:?}")]
     StaleFence { presented: FenceEpoch, current: FenceEpoch },
+    /// The lease's fence epoch matches but the lease has expired.
+    #[error("lease expired: deadline {deadline:?}, now {now:?}")]
     LeaseExpired { deadline: LogicalTime, now: LogicalTime },
+    /// The shard is in a terminal state and cannot accept mutations.
+    #[error("shard {shard:?} is terminal ({status})")]
     ShardTerminal { shard: ShardKey, status: ShardStatus },
+    /// Idempotency conflict: the OpId was previously used with a different payload hash.
+    #[error("op-id conflict: {op_id:?} reused with different payload")]
     OpIdConflict { op_id: OpId, expected_hash: u64, actual_hash: u64 },
+    /// Cursor monotonicity violation.
+    #[error("cursor regression: new key < old key")]
     CursorRegression { old_key: Option<usize>, new_key: Option<usize> },
+    /// Cursor bounds violation: the cursor's `last_key` falls outside the shard's key range.
+    #[error("cursor out of bounds: key ({} bytes) outside shard range", .0.last_key)]
     CursorOutOfBounds(CursorOutOfBoundsDetail),
+    /// Cursor key exceeds the maximum allowed length.
+    #[error("cursor key too large ({size} bytes, max {max})")]
     CursorKeyTooLarge { size: usize, max: usize },
+    /// Cursor token exceeds the maximum allowed length.
+    #[error("cursor token too large ({size} bytes, max {max})")]
     CursorTokenTooLarge { size: usize, max: usize },
-    SplitInvalid(SplitValidationError),
+    /// Split validation failed.
+    #[error("split invalid: {0}")]
+    SplitInvalid(#[source] SplitValidationError),
+    /// Checkpoint requires a `last_key` but the provided cursor has none.
+    #[error("checkpoint requires a last_key")]
     CheckpointMissingKey,
 }
 ```
@@ -625,19 +650,11 @@ pub type SplitResidualError = SplitError;
 
 ### The `std::error::Error` Chain
 
-`CoordError` and `SplitError` implement `std::error::Error::source()`
-for the `SplitInvalid` variant:
-
-```rust
-impl std::error::Error for CoordError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::SplitInvalid(inner) => Some(inner),
-            _ => None,
-        }
-    }
-}
-```
+`Display` and `Error` are derived automatically by `thiserror::Error`.
+The `#[source]` attribute on `SplitInvalid` chains `SplitValidationError`
+as the error source, so `anyhow` and `eyre` can walk the cause chain.
+`SplitError` uses the same `thiserror::Error` derive pattern for its
+`SplitInvalid` variant.
 
 ---
 

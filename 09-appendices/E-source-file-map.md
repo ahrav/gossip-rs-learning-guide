@@ -34,7 +34,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-contracts/src/coordination/cursor.rs` | 04-04 | Cursor monotonicity, cursor types |
 | `crates/gossip-contracts/src/coordination/pooled.rs` | 04-01, 04-11 | PooledShardSpec, PooledCursor, arena-pooled shard fields |
 | `crates/gossip-contracts/src/coordination/split.rs` | 04-06 | Shard splitting, dynamic work distribution |
-| `crates/gossip-contracts/src/coordination/manifest.rs` | 04-01 | RunManifest definition and metadata |
+| `crates/gossip-contracts/src/coordination/manifest.rs` | 04-01 | InitialShardInput, validate_manifest, shard registration input |
 | `crates/gossip-contracts/src/coordination/restored_state.rs` | 04-01 | RestoredShardState for shard recovery |
 | `crates/gossip-contracts/src/coordination/limits.rs` | 04-01 | Coordination limit constants |
 
@@ -49,7 +49,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/record.rs` | 04-02 | ShardRecord, shard state machine |
 | `crates/gossip-coordination/src/record_tests.rs` | 04-02 | ShardRecord unit tests |
 | `crates/gossip-coordination/src/lease.rs` | 04-03, 04-14 | Lease acquisition, TTL, expiry, claim cooldown |
-| `crates/gossip-coordination/src/run.rs` | 04-07, 04-16 | RunManifest, run lifecycle, run management |
+| `crates/gossip-coordination/src/run.rs` | 04-07, 04-16 | RunRecord, RunConfig, run lifecycle, run management |
 | `crates/gossip-coordination/src/run_errors.rs` | 04-18 | Run-specific error types |
 | `crates/gossip-coordination/src/run_tests.rs` | 04-07 | Run lifecycle tests |
 | `crates/gossip-coordination/src/error.rs` | 04-18 | Error taxonomy for coordination |

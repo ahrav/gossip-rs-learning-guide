@@ -324,7 +324,7 @@ impl FindingsSink for InMemoryFindingsSink {
         batch: FindingsUpsertBatch<'_>,
     ) -> Result<Self::CommitHandle, Self::Error> {
         batch.validate_observation_identity()?;
-        validate_batch_tenant_consistency(batch)?;
+        batch.validate_tenant_consistency()?;
 
         let payload = FindingsPayload {
             findings: batch.findings().to_vec(),

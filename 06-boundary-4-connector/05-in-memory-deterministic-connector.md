@@ -10,7 +10,8 @@ The failure above is a test infrastructure bug, not a connector logic bug. The e
 
 The `InMemoryDeterministicConnector` in the `gossip-connectors` crate serves this purpose. It provides the full connector API surface -- enumeration, read, and split-point methods -- using sorted in-memory arrays. All BLAKE3 hashing is done once at construction. Subsequent page emissions use the pooled page assembly path: item keys, item refs, and optional token bytes are staged into a page-local `ByteSlab`, then materialized via `ItemKey::try_from_slot`, `ItemRef::try_from_slot`, and token construction from slots. This incurs one copy per staged field but keeps wrapper cloning allocation-free in the HOT page-emission loop. The page's cursor and items share the same slab owner (`PooledByteSlab`), so returning either one by value keeps pooled bytes valid until the last clone is dropped. The connector is designed for unit tests, conformance harnesses, and simulation workloads where reproducibility matters more than source realism.
 
-The traits from Chapter 3 define the interface this connector implements. The `ItemKey`, `ScanItem`, and `Budgets` from Chapter 2 are the concrete types flowing through the enumeration.
+The types from Chapter 2 and the shared method signatures from Chapter 3 define
+the vocabulary this connector uses. The `ItemKey`, `ScanItem`, and `Budgets` from Chapter 2 are the concrete types flowing through the enumeration.
 
 ---
 

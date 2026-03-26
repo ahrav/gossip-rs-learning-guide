@@ -98,18 +98,42 @@ pub struct ArtifactBuildLimits {
 ```
 
 ```rust
-#[derive(Debug)]
+/// Errors from MIDX building.
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MidxBuildError {
-    Io(io::Error),
+    /// I/O error during pack enumeration or file operations.
+    #[error("MIDX build I/O error: {0}")]
+    Io(#[from] io::Error),
+    /// No pack files found.
+    #[error("no pack files found")]
     NoPacksFound,
+    /// Too many pack files.
+    #[error("too many packs: {count} (max: {max})")]
     TooManyPacks { count: usize, max: usize },
+    /// MIDX would exceed size limit.
+    #[error("MIDX too large: {size} bytes (limit: {limit})")]
     ArtifactsTooLarge { size: u64, limit: u64 },
-    IdxParseFailed { path: PathBuf, source: IdxError },
-    ValidationFailed { source: MidxError },
+    /// Pack index parsing failed.
+    #[error("failed to parse {}: {source}", path.display())]
+    IdxParseFailed {
+        path: PathBuf,
+        #[source]
+        source: IdxError,
+    },
+    /// Generated MIDX failed validation.
+    #[error("MIDX validation failed: {source}")]
+    ValidationFailed {
+        #[source]
+        source: MidxError,
+    },
+    /// Too many objects across all packs.
+    #[error("too many objects: {count} (max: {max})")]
     TooManyObjects { count: u64, max: u64 },
 }
 ```
+
+`Display` and `Error` are derived automatically by `thiserror::Error`; there are no manual trait impls.
 
 The `TooManyPacks` and `TooManyObjects` errors prevent the k-way merge from consuming unbounded memory. The `ArtifactsTooLarge` error fires when the projected MIDX byte size exceeds the configured limit.
 
@@ -278,27 +302,38 @@ The interner uses a 4 MiB arena and an initial estimate of 16,384 unique identit
 Artifact acquisition errors are organized by cause:
 
 ```rust
-#[derive(Debug)]
+/// Errors from artifact acquisition.
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ArtifactAcquireError {
     /// I/O error during artifact access.
-    Io(io::Error),
+    #[error("artifact I/O error: {0}")]
+    Io(#[from] io::Error),
     /// MIDX build failed.
-    MidxBuild(MidxBuildError),
+    #[error("MIDX build failed: {0}")]
+    MidxBuild(#[from] MidxBuildError),
     /// MIDX parsing failed.
-    MidxParse(MidxError),
+    #[error("MIDX parse failed: {0}")]
+    MidxParse(#[from] MidxError),
     /// Commit loading failed during in-memory graph build.
-    CommitLoad(CommitLoadError),
+    #[error("commit loading failed: {0}")]
+    CommitLoad(#[from] CommitLoadError),
     /// In-memory commit graph construction failed.
-    CommitGraphBuild(CommitPlanError),
+    #[error("commit graph build failed: {0}")]
+    CommitGraphBuild(#[source] CommitPlanError),
     /// Repo open error (e.g., fingerprint computation).
-    RepoOpen(RepoOpenError),
+    #[error("repo open error: {0}")]
+    RepoOpen(#[from] RepoOpenError),
     /// Start set resolved to zero tips while repository refs are present.
+    #[error("empty start set while repository refs exist (refusing silent no-op scan)")]
     EmptyStartSetWithRefs,
     /// Concurrent maintenance detected.
+    #[error("concurrent maintenance detected")]
     ConcurrentMaintenance,
 }
 ```
+
+`Display` and `Error` are derived automatically by `thiserror::Error`. The `#[from]` attributes generate `From` impls for `?` propagation; `CommitGraphBuild` uses `#[source]` (no `From` impl) because it requires an explicit constructor call.
 
 The `EmptyStartSetWithRefs` variant deserves attention. It fires when the start set resolver returns zero tips but the repository has reachable refs. This prevents a scan from silently becoming a no-op on repositories that still advertise reachable refs -- a configuration error that would otherwise go undetected.
 

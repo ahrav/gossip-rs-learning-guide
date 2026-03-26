@@ -202,10 +202,12 @@ pub struct FsFindingBatch<'a> {
     pub object_path: &'a [u8],
     /// Post-dedupe findings for this object, in scan-order.
     pub findings: &'a [FsFindingRecord],
+    /// Monotonic counter assigned at discovery time for checkpoint ordering.
+    pub discovery_sequence: u32,
 }
 ```
 
-One batch per scanned object that produced findings. Batches may arrive out of file order when workers run in parallel.
+One batch per scanned object. For plain files: one call per chunk that produced findings, plus an empty-findings call for fully-scanned clean files. For archive entries and extracted binaries: one call per chunk unconditionally. Batches may arrive out of file order when workers run in parallel.
 
 ## 5. FsRunLoss -- Loss Accounting
 
