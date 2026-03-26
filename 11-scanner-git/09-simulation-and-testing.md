@@ -370,6 +370,8 @@ The `generate_scenario` function builds deterministic repo models from a seed. F
 
 ```rust
 pub struct GitScenarioGenConfig {
+    /// Scenario schema version to stamp on outputs.
+    pub schema_version: u32,
     /// Number of commits to generate in a linear chain.
     pub commit_count: u32,
     /// Number of refs to generate.

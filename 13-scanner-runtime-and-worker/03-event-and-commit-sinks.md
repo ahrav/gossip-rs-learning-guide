@@ -80,15 +80,17 @@ Recorder failures are intentionally non-fatal. The first failure for each event 
 
 ### 2.1 The CoordinationEventRecorder Trait
 
-The recorder trait defines three operations:
+The recorder trait defines three operations and requires `fmt::Debug` as a supertrait:
 
 ```rust
-pub trait CoordinationEventRecorder: Send + Sync {
+pub trait CoordinationEventRecorder: Send + Sync + fmt::Debug {
     fn record_core_event(&self, shard_id: &str, event: OwnedCoreEvent) -> Result<()>;
     fn record_git_event(&self, shard_id: &str, event: StoredGitEvent) -> Result<()>;
     fn record_commit_progress(&self, shard_id: &str, event: CommitProgressRecord) -> Result<()>;
 }
 ```
+
+The `fmt::Debug` supertrait bound ensures that any type implementing the recorder can be formatted for diagnostic output, which is required because the recorder is stored as a trait object in `WorkerIdentity` and other types that derive or implement `Debug`.
 
 The `record_commit_progress` method receives lifecycle markers (`Begin` / `Finish`) that track item processing for observability. These are best-effort breadcrumbs, not durability signals.
 

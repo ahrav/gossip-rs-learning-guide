@@ -85,13 +85,14 @@ pub enum WorkerSourceSettings {
 ```rust
 pub struct DistributedWorkerConfig {
     backends: ProductionBackendConfig,
+    startup: ProductionStartupSettings,
     identity: WorkerIdentityConfig,
     source: FsSourceSettings,
     runtime: DistributedWorkerRuntimeSettings,
 }
 ```
 
-The `DistributedWorkerConfig` is type-constrained to `FsSourceSettings` -- distributed mode currently supports only filesystem scans. The backend selection is structurally fixed to `BackendSelection::Production`.
+The `DistributedWorkerConfig` is type-constrained to `FsSourceSettings` -- distributed mode currently supports only filesystem scans. The backend selection is structurally fixed to `BackendSelection::Production`. The `startup` field controls startup-time schema readiness validation: `StartupSchemaMode::Validate` (the default) requires both PostgreSQL schemas to already exist and match the embedded migration history; `StartupSchemaMode::DevAutoMigrate` applies embedded migrations before validation, intended for local development workflows.
 
 ### 3.1 BackendSelection
 
@@ -175,22 +176,22 @@ pub struct ProductionRuntimeBackends {
 
 The module provides two constructors:
 
-**`build_production_backends`** -- builds backends from a `ProductionBackendConfig`, creating PostgreSQL connections from DSN strings using `postgres::NoTls`:
+**`build_production_backends`** -- builds backends from a `ProductionBackendConfig` and `ProductionStartupSettings`, creating PostgreSQL connections from DSN strings using `postgres::NoTls`:
 
 ```rust
 pub fn build_production_backends(
     config: &ProductionBackendConfig,
+    startup: ProductionStartupSettings,
 ) -> Result<ProductionRuntimeBackends, ProductionBootstrapError>
 ```
 
 **`build_production_backends_from_clients`** -- builds backends from pre-connected PostgreSQL clients, allowing callers that need TLS or custom connection handling to supply their own:
 
 The bootstrap process:
-1. Connect to the done-ledger PostgreSQL backend.
-2. Connect to the findings PostgreSQL backend.
-3. Run schema migrations on both (via `ensure_schema()`).
-4. Connect the etcd coordinator.
-5. Return the bundled backends.
+1. Connect both PostgreSQL backends in parallel (overlapping the two ~5s connection timeouts).
+2. Connect the etcd coordinator.
+3. Apply the selected startup schema policy: `Validate` requires existing schemas and migration history; `DevAutoMigrate` runs embedded migrations first, then validates.
+4. Return the bundled backends.
 
 Typed startup failures distinguish which step failed:
 
@@ -199,10 +200,15 @@ pub enum ProductionBootstrapError {
     DoneLedgerConnect(postgres::Error),
     FindingsConnect(postgres::Error),
     EtcdConnect(EtcdCoordinatorError),
-    DoneLedgerMigration(DoneLedgerPgError),
-    FindingsMigration(FindingsPgError),
+    DoneLedgerSchemaReadiness(ProductionSchemaReadinessError),
+    FindingsSchemaReadiness(ProductionSchemaReadinessError),
+    DoneLedgerAutoMigrate(DoneLedgerPgMigrationError),
+    FindingsAutoMigrate(FindingsPgMigrationError),
+    ThreadPanicked { backend: &'static str },
 }
 ```
+
+The `DoneLedgerSchemaReadiness` and `FindingsSchemaReadiness` variants wrap a `ProductionSchemaReadinessError` that classifies the specific readiness failure (missing table, missing migration history row, corrupted checksum, checksum mismatch). The `DoneLedgerAutoMigrate` and `FindingsAutoMigrate` variants fire only under `DevAutoMigrate` mode when migration application itself fails. The `ThreadPanicked` variant catches connection threads that panic instead of returning a result.
 
 Connection-error variants intentionally suppress the inner `postgres::Error` from `Display` and `Error::source()` to prevent DSN fragments (hostname, port, username) from leaking through error chain formatters (anyhow, eyre, tracing-error).
 
@@ -213,12 +219,13 @@ The convenience entry point for the binary:
 ```rust
 pub fn run_production_worker(
     config: &ProductionBackendConfig,
+    startup: ProductionStartupSettings,
     identity: WorkerIdentity,
     runtime: DistributedRuntimeConfig,
 ) -> Result<DistributedRunReport, ProductionWorkerError>
 ```
 
-This function builds the backends, then calls `run_worker` with the concrete `EtcdCoordinator`, `FindingsSinkPg`, and `DoneLedgerPg` types. The `ProductionWorkerError` distinguishes startup failures from runtime failures:
+This function builds the backends with the supplied startup policy, then calls `run_worker` with the concrete `EtcdCoordinator`, `FindingsSinkPg`, and `DoneLedgerPg` types. The `ProductionWorkerError` distinguishes startup failures from runtime failures:
 
 ```rust
 pub enum ProductionWorkerError {

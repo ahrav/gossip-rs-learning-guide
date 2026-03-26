@@ -552,4 +552,4 @@ The `scanner-engine` crate provides two functions that the runtime uses for its 
 
 ## What's Next
 
-[Chapter 2](02-engine-construction.md) examines how the scanner engine is built: rule loading from files and built-in defaults, transform configuration with URL-percent and Base64 decoders, tuning parameters that bound worst-case behavior, anchor policies that control the fast-path filter, and the `OnceLock` caching strategy that avoids rebuilding the engine for every scan.
+[Chapter 2](02-engine-construction.md) examines how the scanner engine is built: rule loading from files and built-in defaults, transform configuration with URL-percent and Base64 decoders, tuning parameters that bound worst-case behavior, and anchor policies that control the fast-path filter.

@@ -152,7 +152,7 @@ gossip-stdx              → (none — leaf crate)
 gossip-contracts         → gossip-stdx
 gossip-pg-common         → (external deps only — leaf workspace crate)
 gossip-coordination      → gossip-contracts, gossip-stdx
-gossip-coordination-etcd → gossip-contracts, gossip-stdx
+gossip-coordination-etcd → gossip-coordination, gossip-contracts, gossip-stdx
 gossip-frontier          → gossip-contracts, gossip-stdx
 gossip-persistence-inmemory → gossip-contracts
 scanner-engine           → gossip-stdx
@@ -165,8 +165,8 @@ gossip-connectors        → gossip-contracts, gossip-stdx,
 gossip-done-ledger-postgres → gossip-contracts, gossip-pg-common
 gossip-findings-postgres → gossip-contracts, gossip-pg-common
 gossip-scanner-runtime   → gossip-contracts, gossip-connectors, gossip-coordination,
-                           gossip-frontier, gossip-stdx, scanner-engine,
-                           scanner-scheduler, scanner-git
+                           gossip-frontier, gossip-orchestrator, gossip-stdx,
+                           scanner-engine, scanner-scheduler, scanner-git
 gossip-orchestrator      → gossip-coordination, gossip-frontier
 gossip-worker            → gossip-scanner-runtime, gossip-contracts,
                            gossip-coordination-etcd, gossip-done-ledger-postgres,

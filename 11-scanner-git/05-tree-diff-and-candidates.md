@@ -244,7 +244,6 @@ The walker tracks how many tree bytes are currently retained in stack frames and
     ) -> Result<TreeCursor, TreeDiffError> {
         if let Some(oid) = oid {
             let bytes = source.load_tree(oid)?;
-            let bytes_len = bytes.len() as u64;
             let in_flight_len = bytes.in_flight_len() as u64;
             let new_in_flight = self.tree_bytes_in_flight.saturating_add(in_flight_len);
 
@@ -352,6 +351,8 @@ Each emitted candidate carries context for attribution and deduplication:
         let path_start = self.path_buf.len();
         self.path_buf.extend_from_slice(name);
 
+        let mode_u16 = mode as u16;
+        let cand_flags = 0;
         candidates.emit(
             *oid,
             &self.path_buf,

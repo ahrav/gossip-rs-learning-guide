@@ -54,12 +54,14 @@ Each claim produces a `ShardLease`:
 pub struct ShardLease {
     shard_id: Arc<str>,
     lease: Lease,
-    range_start: Vec<u8>,
-    scan_config: FsScanConfig,
+    state: RestoredShardState,
+    filesystem_source: HydratedFilesystemSource,
     write_context: WriteContext,
     tenant_secret_key: TenantSecretKey,
 }
 ```
+
+The `state` field holds a `RestoredShardState` that bundles the shard specification (`ShardSpec`), resume cursor, and cursor semantics restored from the coordination acquire/restore payload. The `filesystem_source` field holds a `HydratedFilesystemSource` that bundles the hydrated `FsScanConfig` for this shard and the explicit `FilesystemSourceMode` decoded from the shard's typed metadata payload. Accessor methods like `range_start()`, `range_end()`, `shard_spec()`, `resume_cursor()`, and `scan_config()` delegate to these inner fields.
 
 The lease is constructed from the acquired coordination result by `build_lease_from_acquire`:
 
@@ -68,7 +70,11 @@ fn build_lease_from_acquire(
     acquired: AcquireResultView<'_>,
     identity: &WorkerIdentity,
 ) -> Result<ShardLease> {
-    let spec = acquired.snapshot.spec();
+    let snapshot = acquired.snapshot;
+    let spec = snapshot.spec();
+    let shard_spec = ShardSpec::try_from_ref(spec)?;
+    let resume_cursor = Cursor::try_from_update(snapshot.cursor())?;
+    let state = RestoredShardState::new(shard_spec, resume_cursor, snapshot.cursor_semantics());
     let write_context = WriteContext::new(
         acquired.lease.tenant(),
         identity.policy_hash,
@@ -80,13 +86,15 @@ fn build_lease_from_acquire(
     Ok(ShardLease::new(
         Arc::from(acquired.lease.shard().to_string()),
         acquired.lease,
-        spec.key_range_start().to_vec(),
-        scan_config_from_spec(spec, &identity.scan_template)?,
+        state,
+        hydrate_filesystem_source_from_spec(spec, &identity.scan_template)?,
         write_context,
         identity.tenant_secret_key,
     ))
 }
 ```
+
+The `build_lease_from_acquire` function restores an owned `ShardSpec` and resume `Cursor` from the acquired snapshot, wraps them in a `RestoredShardState`, then calls `hydrate_filesystem_source_from_spec` to decode the shard spec's typed filesystem payload (restoring the canonical root path and source mode) onto the worker's scan template.
 
 The `WriteContext` bundles tenant, policy hash, run, shard, and fencing epoch. Every persistence row emitted under this lease carries this context for routing and deduplication.
 
@@ -145,8 +153,10 @@ fn run_filesystem_lease<F, D>(
     persistence: &DistributedPersistence<F, D>,
     lease: &ShardLease,
     config: DistributedRuntimeConfig,
-) -> Result<(ScanReport, Option<Cursor>), DistributedRuntimeError>
+) -> Result<(ScanReport, FilesystemShardCompletionOutcome), DistributedRuntimeError>
 ```
+
+The return type uses an explicit `FilesystemShardCompletionOutcome` enum instead of `Option<Cursor>`. `FilesystemShardCompletionOutcome::Progress { checkpoint }` means at least one item was durably committed and the checkpoint cursor is authoritative. `FilesystemShardCompletionOutcome::ExhaustedEmpty` means no durable committed unit exists, so completion must use a range-safe exhausted-empty fallback cursor instead.
 
 The function proceeds in four phases:
 
@@ -195,7 +205,7 @@ If the shard committed at least one item:
 3. A `CheckpointCommitReceipt` is constructed with the checkpoint scope and a logical time derived from the last sequence number.
 4. `aggregator.acknowledge_checkpoint(receipt)` drains the acknowledged prefix from the buffer.
 
-The function returns `(ScanReport, Some(cursor))` for non-empty shards, or `(ScanReport, None)` for empty shards.
+The function returns `(ScanReport, FilesystemShardCompletionOutcome::Progress { checkpoint })` for non-empty shards, or `(ScanReport, FilesystemShardCompletionOutcome::ExhaustedEmpty)` for empty shards.
 
 ### Design Choice: Single Worker Thread
 
@@ -210,14 +220,16 @@ fn complete_shard<C>(
     coordinator: &mut C,
     identity: &WorkerIdentity,
     lease: &ShardLease,
-    checkpoint: Option<&Cursor>,
+    outcome: &FilesystemShardCompletionOutcome,
 ) -> Result<(), DistributedRuntimeError>
 ```
 
-The final cursor is chosen as:
-- The receipt-driven checkpoint cursor when items were committed.
-- The shard's `range_start` when zero items were committed but the range is non-empty.
-- A synthetic sentinel key (`b"\x00"`) when the shard has no range start (empty lower bound).
+The `outcome` parameter makes terminal completion semantics explicit:
+
+- `FilesystemShardCompletionOutcome::Progress { checkpoint }` uses the receipt-driven checkpoint cursor.
+- `FilesystemShardCompletionOutcome::ExhaustedEmpty` uses a range-safe exhausted-empty fallback cursor: the shard's `range_start` when it is non-empty, or a synthetic sentinel key (`b"\x00"`) when the shard has no range start (empty lower bound).
+
+The chosen completion cursor is validated with `check_cursor_bounds` before the coordinator call so exhausted-empty fallback completion cannot silently escape the shard's key range.
 
 Completion uses a deterministic `OpId` derived from `(shard_key, fence_epoch, OpKind::Complete)` so replayed calls are idempotent:
 

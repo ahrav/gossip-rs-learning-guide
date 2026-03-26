@@ -16,17 +16,13 @@ Both binaries are thin wrappers that delegate immediately to `gossip-scanner-run
 ### Step 1: Coordinator Creates Run (Boundary 2)
 
 ```rust
-// Coordinator (B2) creates a run with a manifest
-let manifest = RunManifest {
-    run_id: RunId::from_raw(1),
-    tenant_id: tenant,
-    policy_hash: policy_hash,  // From B1
-    connector_tag: ConnectorTag::GitHub,  // From B1
-    initial_shards: vec![
-        ShardRange::full(),  // From B3
-    ],
-    created_at: LogicalTime::now(),
-};
+// Coordinator (B2) creates a run with a config
+// Note: simplified pseudocode — actual API uses RunConfig, not a manifest struct
+let config = RunConfig::try_new(
+    CursorSemantics::Completed,
+    lease_duration,
+    max_shard_retries,
+)?;
 
 coordinator.create_run(now, tenant, run_id, config)?;
 ```

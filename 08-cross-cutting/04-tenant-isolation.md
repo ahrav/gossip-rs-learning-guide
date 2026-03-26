@@ -149,7 +149,7 @@ Even if two tenants scan the same secret, their `FindingId`s must be different. 
 Each tenant has a unique 32-byte secret key used for identity derivation:
 
 ```rust
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct TenantSecretKey([u8; 32]);
 
 impl TenantSecretKey {
@@ -334,9 +334,10 @@ impl TenantSecretKey {
     // NO CanonicalBytes - prevents accidental wire transmission
 }
 
-impl ConstantTimeEq for TenantSecretKey {
-    fn ct_eq(&self, other: &Self) -> Choice {
-        self.0.ct_eq(&other.0)
+impl PartialEq for TenantSecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.0.ct_eq(&other.0).into()
     }
 }
 
