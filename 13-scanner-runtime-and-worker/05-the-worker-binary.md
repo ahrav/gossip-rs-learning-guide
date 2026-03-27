@@ -48,9 +48,15 @@ pub const ENV_RUN_ID: &str = "GOSSIP_RUN_ID";
 pub const ENV_WORKER_ID: &str = "GOSSIP_WORKER_ID";
 pub const ENV_POLICY_HASH: &str = "GOSSIP_POLICY_HASH";
 pub const ENV_TENANT_SECRET_KEY: &str = "GOSSIP_TENANT_SECRET_KEY";
+pub const ENV_STARTUP_SCHEMA_MODE: &str = "GOSSIP_STARTUP_SCHEMA_MODE";
 pub const ENV_MAX_ITEMS: &str = "GOSSIP_MAX_ITEMS";
 pub const ENV_MAX_BYTES: &str = "GOSSIP_MAX_BYTES";
 pub const ENV_COMMIT_QUEUE_CAPACITY: &str = "GOSSIP_COMMIT_QUEUE_CAPACITY";
+pub const ENV_WORKER_RULES_FILE: &str = "GOSSIP_WORKER_RULES_FILE";
+pub const ENV_WORKER_DECODE_DEPTH: &str = "GOSSIP_WORKER_DECODE_DEPTH";
+pub const ENV_WORKER_SCAN_BINARY: &str = "GOSSIP_WORKER_SCAN_BINARY";
+pub const ENV_FS_SKIP_ARCHIVES: &str = "GOSSIP_FS_SKIP_ARCHIVES";
+pub const ENV_WORKER_ANCHOR_MODE: &str = "GOSSIP_WORKER_ANCHOR_MODE";
 ```
 
 The `resolve_worker_config_from_env_and_args` function parses these variables (plus optional CLI overrides like the positional source and path arguments) into a typed `ResolvedWorkerConfig`.

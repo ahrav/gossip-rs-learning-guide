@@ -363,7 +363,7 @@ For readers new to distributed systems, we recommend reading in this order:
 4. Kleppmann (2016) — "How to do distributed locking"
 5. Akidau et al. (2015) — "The Dataflow Model"
 
-For the scanner engine and pattern matching pipeline (Chapters 10–11):
+For the scanner engine and pattern matching pipeline (Chapter 10):
 
 6. Shannon (1948) — "A Mathematical Theory of Communication"
 7. Aho & Corasick (1975) — "Efficient String Matching"
@@ -372,13 +372,13 @@ For the scanner engine and pattern matching pipeline (Chapters 10–11):
 10. YARA Project — "Writing YARA Rules — Base64 Strings"
 11. detect-secrets (Yelp) — entropy-based secret detection
 
-For Git internals and pack file parsing (Chapters 12–13):
+For Git internals and pack file parsing (Chapter 11):
 
 12. Chacon & Straub (2014) — *Pro Git*, Chapter 10 (Packfiles)
 13. Git Project — Pack Format, Pack Index v2, MIDX, Commit-Graph specifications
 14. Meli et al. (2019) — "How Bad Can It Git?"
 
-For work scheduling and runtime (Chapters 13–14):
+For work scheduling and runtime (Chapters 12–13):
 
 15. Chase & Lev (2005) — "Dynamic Circular Work-Stealing Deque"
 16. Blumofe & Leiserson (1999) — "Scheduling Multithreaded Computations by Work Stealing"

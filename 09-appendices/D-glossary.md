@@ -22,7 +22,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Budgets**: Per-operation resource limits: `max_items`, `max_bytes`, `deadline`. Passed to connector enumeration and read operations to bound resource consumption. (Chapter 06)
 
-**byte_midpoint**: Approximate bisection point between two keys for split planning. Five-phase algorithm: pad, add, halve, try overflow-normalized, fallback successor. Used by shard algebra to compute split boundaries. (Chapter 05)
+**byte_midpoint**: Approximate bisection point between two keys for split planning. Five-phase algorithm: add (with zero-padding), halve, try overflow-normalized candidate, try fixed-width candidate, fallback successor. Used by shard algebra to compute split boundaries. (Chapter 05)
 
 **ByteSlab**: Fixed-capacity arena allocator in `gossip-stdx` that provides bump-pointer + free-list allocation for variable-length byte fields. Pre-allocates a single contiguous buffer at startup; used by `InMemoryCoordinator` to pool `ShardRecord` spec and cursor byte fields, eliminating per-field heap allocation on hot paths. (Appendix F, Chapter 04-11)
 
@@ -37,6 +37,8 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 **Collision**: When two distinct inputs produce the same hash. BLAKE3 provides 256-bit collision resistance (~2^128 operations to find). (Appendix B)
 
 **CheckpointDurable**: Terminal type state for `PageCommit<S>` after all three durability stages (findings, done-ledger, checkpoint) are complete. Contains the `PageCommitReceipt` proving the frontier boundary is durable. (Chapter 07-04)
+
+**CheckpointBoundary**: Family-neutral durable checkpoint boundary wrapping a `Cursor` plus `CheckpointBoundaryKind` (`OrderedContent` or `RepoFrontier`). Central to the commit protocol as a field of `CommitScope`. Defined in `gossip-contracts/src/persistence/page_commit.rs`. (Chapter 07-04)
 
 **Connector**: Component that bridges Gossip-rs to external systems (GitHub, S3, etc.). Implements enumeration and content reading. (Chapter 06)
 
@@ -64,6 +66,8 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Cursor**: Opaque token representing position in enumeration. Enables resumption after crash. (Chapter 06)
 
+**CursorSemantics**: Enum controlling when cursor advancement counts as durable progress (`Completed` = advance only after full shard completion, `Dispatched` = advance after each page commit). Field of `RunConfig`. Defined in `gossip-contracts/src/coordination/shard_spec.rs`. (Chapter 04-07)
+
 ## D
 
 **`define_canonical_input!`**: Declarative macro in `macros.rs` that generates a struct with an automatic `CanonicalBytes` implementation. Fields are written to the BLAKE3 hasher in struct declaration order, making field reordering a breaking change (it changes derived hashes). Used for `FindingIdInputs`, `OccurrenceIdInputs`, `ObservationIdInputs`, and `PolicyHashInputs`. (Chapter 02-08)
@@ -82,7 +86,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 ## E
 
-**EnumerateError**: Connector operation failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector planning methods like `choose_split_point`. (Chapter 06)
+**EnumerateError**: Connector operation failure carrying an `ErrorClass` discriminant (`Retryable` or `Permanent`) plus a diagnostic message. Returned from connector enumeration and split-planning methods. (Chapter 06)
 
 **Enumeration**: Process of listing items from a source. Scanning within shard ranges is driven through the runtime dispatch modules (`ordered_content`, `git_repo`). (Chapter 06)
 
@@ -220,7 +224,9 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **PooledCursor**: Arena-pooled mirror of `Cursor` backed by `Option<ByteSlot>` handles into a `ByteSlab`. Holds 0-2 slots for `last_key` and `token`. Uses `Option<ByteSlot>` (not bare `ByteSlot::EMPTY`) to preserve the semantic distinction between "no progress" (`None`) and "present but empty." (Chapter 04-01, Appendix F)
 
-**PooledShardSpec**: Arena-pooled mirror of `ShardSpec` backed by `ByteSlot` handles into a `ByteSlab`. Holds exactly 3 slots for `key_range_start`, `key_range_end`, and `metadata`. Intentionally not `Copy` or `Clone` to prevent aliased handles (SLAB-2). (Chapter 04-01, Appendix F)
+**PooledShardSpec**: Arena-pooled mirror of `ShardSpec` backed by `ByteSlot` handles into a `ByteSlab`. Holds exactly 3 slots for `key_range_start`, `key_range_end`, and `metadata`. Intentionally not `Copy` or `Clone` to prevent aliased handles (SLAB-2). Defined in `gossip-contracts/src/coordination/pooled.rs`. (Chapter 04-01, Appendix F)
+
+**PooledSpawned**: Arena-pooled shard lineage storage. Stores packed `u64` shard IDs in a single `ByteSlot` from a `ByteSlab`, avoiding per-spawn heap allocation on the coordination hot path. Defined in `gossip-contracts/src/coordination/pooled.rs`. (Chapter 04-01, Appendix F)
 
 **PreallocShardBuilder**: Startup-preallocated shard builder in `gossip-frontier` with two-phase workflow: stage shard specs, then finalize into immutable shard set. Avoids runtime allocation during shard construction. (Chapter 05)
 
@@ -238,7 +244,7 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **Redacted Debug**: Custom `Debug` impl that hides sensitive data. Used for `TenantSecretKey`. (Appendix A)
 
-**ReceiptCommitSink**: Distributed-mode `CommitSink` implementation that captures per-item scan receipts and feeds them into the `CommitPipeline` for batched persistence. Defined in `gossip-scanner-runtime/src/distributed.rs`.
+**ReceiptCommitSink**: Distributed-mode `CommitSink` implementation that captures per-item scan receipts and feeds them into the `CommitPipeline` for batched persistence. Module-private (`struct ReceiptCommitSink`, no `pub`). Defined in `gossip-scanner-runtime/src/distributed.rs`.
 
 **ResultCommitter**: Final stage of the commit pipeline that writes scan results to the coordination backend and persistence layer. Defined in `gossip-scanner-runtime/src/result_committer.rs`.
 
@@ -280,6 +286,10 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 
 **ShardMetadata**: Envelope wrapping a `ShardHint` plus opaque connector-extra bytes. Wire-framed with length-prefixed encoding for zero-copy decode. Defined in `gossip-frontier`. (Chapter 05)
 
+**ShardRecord**: The coordinator's authoritative state for a single shard. Tracks lifecycle status, ownership, cursor progress, lease, fence epoch, parent lineage, spawned children, and op-log. Enforces 10 structural invariants via `validate_invariants()`. Defined in `gossip-coordination/src/record.rs`. (Chapter 04-01)
+
+**ShardStatus**: The shard lifecycle state machine enum: `Active`, `Done`, `Split`, `Parked`. `#[repr(u8)]` with discriminants 0–3. Only `Active` is non-terminal within the coordination protocol. Defined in `gossip-coordination/src/record.rs`. (Chapter 04-01)
+
 **SlabFull**: Error returned when a `ByteSlab` cannot accommodate a requested allocation. Propagated as `Result<_, SlabFull>` from `ShardRecord` constructors and cursor update methods. Indicates the coordinator's arena needs a larger `slab_capacity` in `CoordinatorRuntimeConfig`. (Appendix F, Chapter 04-11)
 
 **ShardId**: Identity for a shard. A `u64`-based type generated by `define_id_64!`; derived (split) shards have bit 63 set. (Chapter 04-02)
@@ -317,6 +327,8 @@ This glossary defines 50+ domain terms used throughout Gossip-rs, with brief exp
 **WorkerSession**: Context for a worker's shard assignment: shard ID, range, fencing token, lease expiry. (Chapter 04-03)
 
 **WorkerId**: Identity for a worker process. A `u64`-based type generated by `define_id_64!`. (Chapter 04)
+
+**WriteContext**: Shared write context threaded through persistence operations. Carries tenant, policy, run, shard, and fence epoch. Used by `CommitScope::from_write_context`. Defined in `gossip-contracts/src/persistence/write_context.rs`. (Chapter 07-04)
 
 ## Z
 

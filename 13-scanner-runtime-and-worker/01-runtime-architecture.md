@@ -154,23 +154,23 @@ Scan budgets control checkpoint frequency and byte limits. These are the operati
 pub struct ScanBudgets {
     /// Maximum items processed between checkpoints.
     pub max_items: usize,
-    /// Runtime-level byte budget knob.
+    /// Total bytes the executor may read from the source per page pass.
     pub max_bytes: u64,
 }
 
 impl Default for ScanBudgets {
     fn default() -> Self {
         Self {
-            max_items: 256,
-            max_bytes: 1_000_000,
+            max_items: 4_096,
+            max_bytes: 64 * 1024 * 1024, // 64 MiB
         }
     }
 }
 ```
 
-**`max_items: usize`.** The checkpoint frequency in items. After processing this many items, the orchestration layer can query `checkpoint_hint()` and persist a cursor update to the coordinator. The default is 256 items -- frequent enough to provide reasonable resumption granularity (losing at most 256 items of work on crash), but infrequent enough to avoid checkpoint overhead dominating scan time. The `ScanBudgets::validate()` method enforces that this value is non-zero before any scan dispatch begins.
+**`max_items: usize`.** The checkpoint frequency in items. After processing this many items, the orchestration layer can query `checkpoint_hint()` and persist a cursor update to the coordinator. The default is 4,096 items -- frequent enough to provide reasonable resumption granularity, but infrequent enough to avoid checkpoint overhead dominating scan time. The `ScanBudgets::validate()` method enforces that this value is non-zero before any scan dispatch begins.
 
-**`max_bytes: u64`.** A runtime-level byte budget knob. The default is 1,000,000 bytes (approximately 1 MB). This provides a safeguard against runaway scans that process unexpectedly large items without checkpointing. The exact semantics depend on how the driver uses the value, but the runtime enforces that it is non-zero.
+**`max_bytes: u64`.** Total bytes the executor may read from the source per page pass. The default is 64 MiB. At 1-2 GB/s engine throughput, this yields approximately 32-64 ms of scan work per page. Memory pressure stays bounded because only one 256 KiB scan buffer is live at a time; the byte budget controls how many bytes are read from the source, not how much RAM is resident. The runtime enforces that this value is non-zero.
 
 The budget validation rejects zero values for both fields:
 

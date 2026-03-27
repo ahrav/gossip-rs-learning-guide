@@ -10,7 +10,7 @@ This appendix maps source files to the chapters that reference them, enabling qu
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
-| `crates/gossip-contracts/src/identity/mod.rs` | 02-01, 02-10 | Module structure, public API, re-exports |
+| `crates/gossip-contracts/src/identity/mod.rs` | 02-01 | Module structure, public API, re-exports |
 | `crates/gossip-contracts/src/identity/types.rs` | 01-04, 02-04 | Newtype definitions: TenantId, etc. (32-byte types via `define_id_32!`) |
 | `crates/gossip-contracts/src/identity/canonical.rs` | 01-02, 02-02 | CanonicalBytes trait, deterministic encoding |
 | `crates/gossip-contracts/src/identity/hashing.rs` | 01-01, 02-02 | BLAKE3 wrappers, hasher initialization, domain separation |
@@ -49,17 +49,17 @@ This appendix maps source files to the chapters that reference them, enabling qu
 | `crates/gossip-coordination/src/record.rs` | 04-02 | ShardRecord, shard state machine |
 | `crates/gossip-coordination/src/record_tests.rs` | 04-02 | ShardRecord unit tests |
 | `crates/gossip-coordination/src/lease.rs` | 04-03, 04-14 | Lease acquisition, TTL, expiry, claim cooldown |
-| `crates/gossip-coordination/src/run.rs` | 04-07, 04-16 | RunRecord, RunConfig, run lifecycle, run management |
-| `crates/gossip-coordination/src/run_errors.rs` | 04-18 | Run-specific error types |
+| `crates/gossip-coordination/src/run.rs` | 04-03, 04-07 | RunRecord, RunConfig, run lifecycle, run management |
+| `crates/gossip-coordination/src/run_errors.rs` | 04-01 | Run-specific error types |
 | `crates/gossip-coordination/src/run_tests.rs` | 04-07 | Run lifecycle tests |
-| `crates/gossip-coordination/src/error.rs` | 04-18 | Error taxonomy for coordination |
-| `crates/gossip-coordination/src/error_tests.rs` | 04-18 | Error taxonomy tests |
+| `crates/gossip-coordination/src/error.rs` | 04-01 | Error taxonomy for coordination |
+| `crates/gossip-coordination/src/error_tests.rs` | 04-01 | Error taxonomy tests |
 | `crates/gossip-coordination/src/session.rs` | 04-09 | WorkerSession, session management |
 | `crates/gossip-coordination/src/session_tests.rs` | 04-09 | WorkerSession tests |
 | `crates/gossip-coordination/src/facade.rs` | 04-13 | CoordinationFacade super-trait, ShardClaiming, high-level API |
 | `crates/gossip-coordination/src/facade_tests.rs` | 04-13 | Facade tests |
-| `crates/gossip-coordination/src/events.rs` | 04-15 | Events system, coordination event types |
-| `crates/gossip-coordination/src/validation.rs` | 04-17 | Validation layer, 5-check preamble |
+| `crates/gossip-coordination/src/events.rs` | 04-01 | Events system, coordination event types |
+| `crates/gossip-coordination/src/validation.rs` | 04-10 | Validation layer, 5-check preamble |
 | `crates/gossip-coordination/src/in_memory.rs` | 04-11 | InMemoryCoordinator reference implementation |
 | `crates/gossip-coordination/src/in_memory_tests.rs` | 04-11, 04-12 | In-memory backend tests |
 | `crates/gossip-coordination/src/in_memory_filter_tests.rs` | 04-12 | In-memory filter tests |
@@ -113,7 +113,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-coordination-etcd/src/keyspace.rs` | 04-08 | Deterministic ASCII etcd path construction for runs, shards, leases, indexes |
 | `crates/gossip-coordination-etcd/src/codec.rs` | 04-08 | Binary encoding/decoding of coordination records to etcd values |
 | `crates/gossip-coordination-etcd/src/codec_tests.rs` | 04-08 | Codec roundtrip and compatibility tests |
-| `crates/gossip-coordination-etcd/src/error.rs` | 04-18 | etcd-specific error types and mapping to coordination errors |
+| `crates/gossip-coordination-etcd/src/error.rs` | 04-01 | etcd-specific error types and mapping to coordination errors |
 | `crates/gossip-coordination-etcd/src/sim_coordinator.rs` | 08-05 | Simulated etcd coordinator for deterministic testing |
 | `crates/gossip-coordination-etcd/src/sim_etcd_kv.rs` | 08-05 | Simulated etcd key-value store |
 | `crates/gossip-coordination-etcd/src/test_support.rs` | 04-12 | Test support utilities for etcd backend |
@@ -127,11 +127,11 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 |------------|------------------|---------|
 | `crates/gossip-frontier/src/lib.rs` | 05-01 | Crate root, `#![forbid(unsafe_code)]`, public re-exports |
 | `crates/gossip-frontier/src/key_encoding.rs` | 05-02 | `KeyEncoding` trait, `PathKey`, `ManifestRowKey`, range arithmetic |
-| `crates/gossip-frontier/src/key_encoding_tests.rs` | 05-02 | Property tests and edge cases |
+| `crates/gossip-frontier/src/key_encoding_tests.rs` | 05-02, 05-07 | Property tests and edge cases |
 | `crates/gossip-frontier/src/hint.rs` | 05-03, 05-04 | `ShardHint`/`ShardMetadata` wire framing, split propagation |
-| `crates/gossip-frontier/src/hint_tests.rs` | 05-03, 05-04 | Roundtrip and propagation tests |
-| `crates/gossip-frontier/src/builder.rs` | 05-05 | `PreallocShardBuilder` two-phase startup builder |
-| `crates/gossip-frontier/src/builder_tests.rs` | 05-05 | Builder behavioral tests |
+| `crates/gossip-frontier/src/hint_tests.rs` | 05-03, 05-04, 05-07 | Roundtrip and propagation tests |
+| `crates/gossip-frontier/src/builder.rs` | 05-05, 05-06 | `PreallocShardBuilder` two-phase startup builder, bulk splits, manifest validation |
+| `crates/gossip-frontier/src/builder_tests.rs` | 05-05, 05-06, 05-07 | Builder behavioral tests, bulk split tests |
 
 ### Connector Contracts (Boundary 4)
 
@@ -165,7 +165,7 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-contracts/src/persistence/page_commit.rs` | 07-04 | PageCommit typestate builder |
 | `crates/gossip-contracts/src/persistence/commit.rs` | 07-04 | Commit protocol types |
 | `crates/gossip-contracts/src/persistence/error.rs` | 07-01 | Persistence error types |
-| `crates/gossip-contracts/src/persistence/conformance.rs` | 07-05 | Persistence conformance test suite |
+| `crates/gossip-contracts/src/persistence/conformance.rs` | 07-05, 07-06 | Persistence conformance test suite |
 | `crates/gossip-contracts/src/persistence/ovid.rs` | 07-01 | Observation/version identity helpers |
 | `crates/gossip-contracts/src/persistence/write_context.rs` | 07-04 | Write context for persistence operations |
 
@@ -183,7 +183,7 @@ In-memory reference persistence backends for tests and deterministic simulation.
 | `crates/gossip-persistence-inmemory/src/store.rs` | 07-05 | Shared in-memory store state |
 | `crates/gossip-persistence-inmemory/src/pending.rs` | 07-05 | Pending commit tracking and notification |
 | `crates/gossip-persistence-inmemory/src/error.rs` | 07-05 | Persistence error types for in-memory backend |
-| `crates/gossip-persistence-inmemory/src/tests.rs` | 07-05 | Integration and behavioral tests |
+| `crates/gossip-persistence-inmemory/src/tests.rs` | 07-05, 07-06 | Integration, behavioral, and conformance tests |
 
 #### gossip-persistence-inmemory Simulation Harness
 
@@ -443,8 +443,8 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
-| `docs/gossip-contracts/boundary-1-identity-spine.md` | 02-01 through 02-10 | Boundary 1 complete documentation |
-| `docs/gossip-coordination/boundary-2-coordination.md` | 04-01 through 04-18 | Boundary 2 coordination protocol specification |
+| `docs/gossip-contracts/boundary-1-identity-spine.md` | 02-01 through 02-09 | Boundary 1 complete documentation |
+| `docs/gossip-coordination/boundary-2-coordination.md` | 04-01 through 04-14 | Boundary 2 coordination protocol specification |
 | `docs/gossip-coordination/coordination-testing.md` | 04-12, 08-05 | Test tier breakdown and cargo test commands |
 | `docs/gossip-coordination/simulation-harness.md` | 08-05 | Simulation architecture, invariants S1-S9, fault levels |
 | `diagrams/00-README.md` | 00-03 | Diagram index, how to read diagrams |
@@ -467,7 +467,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
-| `tmp/gossip-project-artifacts/phase2_spec.md` | 04-01 through 04-18 | Phase 2 coordination spec |
+| `tmp/gossip-project-artifacts/phase2_spec.md` | 04-01 through 04-14 | Phase 2 coordination spec |
 | `tmp/gossip-project-artifacts/distributed-secret-scanner-instructions.md` | 00-01, 00-02, REFERENCES | Original system design document |
 | `tmp/gossip-project-artifacts/gossip-contracts-references.md` | REFERENCES, Deep Dive boxes | Contracts crate documentation |
 | `tmp/gossip-project-artifacts/phase0-outline.md` | 00-01 | Phase 0 planning outline |
@@ -510,7 +510,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - **01-05: Invariant-First Design**
   - All identity source files (invariants demonstrated throughout)
 
-### Chapter 02: Boundary 1 -- Identity Spine (10 files)
+### Chapter 02: Boundary 1 -- Identity Spine (9 files)
 
 - **02-01: Identity Problem Space**
   - `crates/gossip-contracts/src/identity/mod.rs` (module structure)
@@ -544,9 +544,6 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - **02-09: Golden Vectors and Testing**
   - `crates/gossip-contracts/src/identity/golden.rs` (test vectors)
 
-- **02-10: Version Migration**
-  - All `#[cfg(test)]` blocks in `crates/gossip-contracts/src/identity/*.rs`
-
 ### Chapter 03: Distributed Systems Theory (6 files)
 
 - **03-01: Impossibility Results**
@@ -570,11 +567,14 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-contracts/src/persistence/mod.rs` (DoneLedger)
   - `crates/gossip-coordination/src/validation.rs` (validation preamble)
 
-### Chapter 04: Boundary 2 -- Coordination (18 files)
+### Chapter 04: Boundary 2 -- Coordination (14 files)
 
 - **04-01: Coordination Problem Space**
   - `crates/gossip-contracts/src/coordination/mod.rs` (contract types)
   - `crates/gossip-coordination/src/lib.rs` (runtime crate root)
+  - `crates/gossip-coordination/src/events.rs` (coordination event types)
+  - `crates/gossip-coordination/src/error.rs` (coordination error types)
+  - `crates/gossip-coordination/src/run_errors.rs` (run-specific error types)
   - `docs/gossip-coordination/boundary-2-coordination.md` (complete documentation)
   - `tmp/gossip-project-artifacts/phase2_spec.md` (design spec)
 
@@ -631,20 +631,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-coordination/src/lease.rs` (per-worker claim cooldown)
   - `diagrams/07-lease-lifecycle.md` (lease lifecycle)
 
-- **04-15: Events System**
-  - `crates/gossip-coordination/src/events.rs` (coordination events)
-
-- **04-16: Run Management**
-  - `crates/gossip-coordination/src/run.rs` (run management operations)
-
-- **04-17: Validation Layer**
-  - `crates/gossip-coordination/src/validation.rs` (5-check validation preamble)
-
-- **04-18: Error Taxonomy**
-  - `crates/gossip-coordination/src/error.rs` (coordination error types)
-  - `crates/gossip-coordination/src/run_errors.rs` (run-specific errors)
-
-### Chapter 05: Boundary 3 -- Shard Algebra (5 files)
+### Chapter 05: Boundary 3 -- Shard Algebra (7 files)
 
 - **05-01: Range Sharding Theory**
   - `crates/gossip-frontier/src/lib.rs` (crate root)
@@ -661,6 +648,15 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 
 - **05-05: Coverage Verification**
   - `crates/gossip-frontier/src/builder.rs` (PreallocShardBuilder)
+
+- **05-06: Bulk Splits and Validation**
+  - `crates/gossip-frontier/src/builder.rs` (split_range_by_boundaries, split_manifest_by_rows, build_inputs)
+  - `crates/gossip-frontier/src/builder_tests.rs` (bulk split and manifest validation tests)
+
+- **05-07: Testing the Algebra**
+  - `crates/gossip-frontier/src/key_encoding_tests.rs` (key encoding property tests)
+  - `crates/gossip-frontier/src/hint_tests.rs` (hint framing and propagation tests)
+  - `crates/gossip-frontier/src/builder_tests.rs` (builder behavioral tests)
 
 ### Chapter 06: Boundary 4 -- Connector (8 files)
 
@@ -690,7 +686,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-connectors/src/git.rs` (Git connector)
   - `crates/gossip-connectors/src/git_tests.rs` (Git connector tests)
 
-### Chapter 07: Boundary 5 -- Persistence (5 files)
+### Chapter 07: Boundary 5 -- Persistence (6 files)
 
 - **07-01: Persistence Problem Space**
   - `crates/gossip-contracts/src/persistence/mod.rs` (persistence contracts)
@@ -711,6 +707,10 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
   - `crates/gossip-persistence-inmemory/src/done_ledger.rs` (In-memory done-ledger)
   - `crates/gossip-persistence-inmemory/src/findings.rs` (In-memory findings sink)
   - `crates/gossip-contracts/src/persistence/conformance.rs` (Persistence conformance test suite)
+
+- **07-06: Persistence Conformance**
+  - `crates/gossip-contracts/src/persistence/conformance.rs` (run_conformance harness, lattice merge, idempotency, referential integrity checks)
+  - `crates/gossip-persistence-inmemory/src/tests.rs` (conformance test invocations)
 
 ### Chapter 08: Cross-Cutting (5 files)
 
@@ -841,11 +841,11 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 2. Read `crates/gossip-coordination/src/session.rs`
 
 **Events and observability**:
-1. Read Chapter 04-15 (Events System)
+1. Read Chapter 04-01 (Coordination Problem Space)
 2. Read `crates/gossip-coordination/src/events.rs`
 
 **Error handling in coordination**:
-1. Read Chapter 04-18 (Error Taxonomy)
+1. Read Chapter 04-01 (Coordination Problem Space)
 2. Read `crates/gossip-coordination/src/error.rs`
 3. Read `crates/gossip-coordination/src/run_errors.rs`
 
@@ -889,10 +889,10 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - Overview: Chapter 04-09 (Worker Session)
 
 **`crates/gossip-coordination/src/events.rs`**:
-- Overview: Chapter 04-15 (Events System)
+- Overview: Chapter 04-01 (Coordination Problem Space)
 
 **`crates/gossip-coordination/src/validation.rs`**:
-- Overview: Chapter 04-17 (Validation Layer)
+- Overview: Chapter 04-10 (Validation Layer)
 - Context: Chapter 08-04 (Tenant Isolation)
 
 **`crates/gossip-coordination/src/split_execution.rs`**:
@@ -944,7 +944,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - Overview: Chapter 05-03 (Range Algebra), Chapter 05-04 (Split Computation)
 
 **`crates/gossip-frontier/src/builder.rs`**:
-- Overview: Chapter 05-05 (Coverage Verification)
+- Overview: Chapter 05-05 (Coverage Verification), Chapter 05-06 (Bulk Splits and Validation)
 
 **`crates/gossip-coordination/src/sim/harness.rs`**:
 - Overview: Chapter 08-05 (Deterministic Simulation Testing)
@@ -992,9 +992,9 @@ Many chapters include "Deep Dive" boxes that reference specific source locations
 | InMemoryCoordinator | `crates/gossip-coordination/src/in_memory.rs` | 04-11 |
 | CoordinationFacade | `crates/gossip-coordination/src/facade.rs` | 04-13 |
 | Per-worker claim cooldown | `crates/gossip-coordination/src/lease.rs` | 04-14 |
-| Coordination events | `crates/gossip-coordination/src/events.rs` | 04-15 |
-| 5-check validation preamble | `crates/gossip-coordination/src/validation.rs` | 04-17 |
-| Coordination error taxonomy | `crates/gossip-coordination/src/error.rs` | 04-18 |
+| Coordination events | `crates/gossip-coordination/src/events.rs` | 04-01 |
+| 5-check validation preamble | `crates/gossip-coordination/src/validation.rs` | 04-10 |
+| Coordination error taxonomy | `crates/gossip-coordination/src/error.rs` | 04-01 |
 | CoordinationSim architecture | `crates/gossip-coordination/src/sim/harness.rs` | 08-05 |
 | Invariants S1-S9 | `crates/gossip-coordination/src/sim/invariants.rs` | 08-05 |
 | Fault injection | `crates/gossip-coordination/src/sim/fault_injector.rs` | 08-05 |
@@ -1040,7 +1040,7 @@ See `docs/gossip-coordination/coordination-testing.md` for the test tier breakdo
 | `docs/gossip-contracts/boundary-5-persistence.md` | Boundary 5 persistence documentation | Chapter 07 |
 | `docs/gossip-coordination/boundary-2-coordination.md` | Coordination protocol specification | All of Chapter 04 |
 | `docs/gossip-coordination/coordination-testing.md` | Test tier breakdown, cargo test commands | Chapter 04-12, 08-05 |
-| `docs/gossip-coordination/coordination-error-model.md` | Coordination error taxonomy design | Chapter 04-18 |
+| `docs/gossip-coordination/coordination-error-model.md` | Coordination error taxonomy design | Chapter 04-01 |
 | `docs/gossip-coordination/simulation-harness.md` | Simulation architecture, invariants S1-S9, fault levels | Chapter 08-05 |
 | `diagrams/00-README.md` | Diagram index and reading guide | Chapter 00-03 |
 | `specs/coordination/ShardFencing.tla` | TLA+ fencing specification | Chapters 04-03, Appendix G |

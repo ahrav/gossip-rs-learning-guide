@@ -19,7 +19,7 @@ Engineers who want to understand distributed systems design through a concrete, 
 | Boundary | Name | Status | Implementation Details |
 |----------|------|--------|------------------------|
 | B1 | Identity & Hashing Spine | ✅ Fully Implemented | 11 files, 48 invariants, 9 golden vectors, zero unsafe code |
-| B2 | Coordination | ✅ Fully Implemented | 46 source files (26 core + 20 sim) + 8 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (20 sim modules including composition), etcd production backend, TLA+ spec, ~35K lines |
+| B2 | Coordination | ✅ Fully Implemented | 46 source files (26 core + 20 sim) + 9 contract files in gossip-contracts/coordination, S1-S9 invariants, reference backend, simulation harness (20 sim modules including composition), etcd production backend, TLA+ spec, ~35K lines |
 | B3 | Shard Algebra | ✅ Fully Implemented | 7 source files in gossip-frontier crate, key encoding, hint metadata, builder |
 | B4 | Connector | ✅ Fully Implemented | 10 contract files (6 source + 4 test), 10 implementation files across 3 concrete connectors (in-memory, filesystem, git) with streaming split estimation, 6 guide chapters |
 | B5 | Persistence | ✅ Fully Implemented | Contract traits + in-memory test doubles + PostgreSQL backends (gossip-done-ledger-postgres, gossip-findings-postgres, gossip-pg-common), conformance harness |
@@ -57,7 +57,7 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 | **01-foundations** | Content addressing, collision-free encoding, type-driven design |
 | **02-boundary-1** | TenantId, PolicyHash, StableItemId, FindingId, OccurrenceId, ObjectVersionId, ConnectorInstanceIdHash, ObservationId, deterministic derivation |
 | **03-distributed-theory** | CAP theorem, linearizability, consensus, failure detection |
-| **04-boundary-2** | The coordination problem, leases and fencing, runs and claiming, acquiring and scanning, idempotency and op-log, completion and parking, shard algebra (half-open ranges, split-replace, split-residual), validation layer, reference implementation, simulation and TLA+ (12 chapters) |
+| **04-boundary-2** | The coordination problem, leases and fencing, runs and claiming, acquiring and scanning, idempotency and op-log, completion and parking, shard algebra (half-open ranges, split-replace, split-residual), validation layer, reference implementation, simulation and TLA+ (14 chapters) |
 | **05-boundary-3** | Key encoding, range arithmetic, hint metadata, split propagation, startup builder, property tests (7 chapters) |
 | **06-boundary-4** | Connector problem space, toxic byte value wrappers, ordered-content and git trait surfaces, error classification, in-memory deterministic connector, filesystem connector with streaming split estimation, git connector, conformance harness (6 chapters) |
 | **07-boundary-5** | Done ledger, exactly-once semantics, commit protocol, WAL design |
@@ -81,7 +81,7 @@ This guide is designed to be read in order. Each chapter builds on concepts intr
 
 ### For Learners
 
-Read sequentially from Chapter 0 through Chapter 9. Work through the exercises in each chapter. Study the Mermaid diagrams and trace through the state machines.
+Read sequentially from Chapter 0 through Chapter 13. Work through the exercises in each chapter. Study the Mermaid diagrams and trace through the state machines.
 
 ### For Implementers
 
@@ -89,7 +89,7 @@ Start with the prologue to understand the problem space, then jump to the bounda
 
 ### For Reviewers
 
-Focus on Chapter 03 (distributed theory) and Chapter 07 (testing strategy) to understand the correctness arguments.
+Focus on Chapter 03 (distributed theory) and Chapter 08 (cross-cutting: testing and simulation) to understand the correctness arguments.
 
 ## Documentation Stats
 
