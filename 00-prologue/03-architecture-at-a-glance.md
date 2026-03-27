@@ -107,7 +107,7 @@ CoordinationFacade
 - **S8 (RunTerminalIrreversibility)**: Terminal run states (`Done`, `Failed`, `Cancelled`) never revert
 - **S9 (CooldownViolation)**: A worker must not claim twice within `cooldown_interval` ticks
 
-**Status**: ✅ **Fully implemented** (46 source files in gossip-coordination — 26 core + 20 sim modules, 8 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
+**Status**: ✅ **Fully implemented** (46 source files in gossip-coordination — 26 core + 20 sim modules, 9 contract files in gossip-contracts/coordination, ~35K lines, reference in-memory backend, deterministic simulation harness, TLA+ formal specification)
 
 **Code**: `crates/gossip-contracts/src/coordination/` and `crates/gossip-coordination/`
 
@@ -190,7 +190,7 @@ See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/)** for complete
 | Boundary | Status | Files | Invariants | Tests |
 |----------|--------|-------|------------|-------|
 | **B1: Identity** | ✅ Fully Implemented | 11 | 37 | Property tests, golden vectors, unit tests |
-| **B2: Coordination** | ✅ Fully Implemented | 25 source + 8 contract + 16 test | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
+| **B2: Coordination** | ✅ Fully Implemented | 26 source + 9 contract + 20 sim | S1-S9 | Unit, conformance, scenario, simulation, TLA+ |
 | **B3: Shard Algebra** | ✅ Fully Implemented | 7 + 3 test | 3 | Unit tests, property tests (1,842 test lines) |
 | **B4: Connector** | ✅ Fully Implemented | 10 contracts + 10 impl + 4 contract tests | 3 | Conformance harness, unit tests |
 | **B5: Persistence** | 🔧 Contracts + In-Memory + Postgres | 12 contract files + 3 impl crates | 3 | In-memory and PostgreSQL backends |
@@ -334,10 +334,10 @@ graph LR
 
 **Crate Responsibilities**:
 
-- **gossip-contracts**: All five boundary contracts (B1-B5), coordination reference backend, simulation harness
+- **gossip-contracts**: All five boundary contracts (B1-B5) — identity types, coordination traits, connector traits, persistence traits
 - **gossip-frontier**: B3 Shard Algebra implementation (key encoding, range arithmetic, shard hints, builder)
 - **gossip-stdx**: Unsafe utility data structures (`RingBuffer`, `InlineVec`, `ByteSlab`) behind safe APIs, Miri-tested. Embodies the "allocate at startup" philosophy: `ByteSlab` pre-allocates a contiguous arena so that coordination hot paths avoid per-operation heap allocation entirely
-- **gossip-coordination**: In-memory coordinator, simulation harness (7 sim modules), trait definitions, session management, lease validation, split execution, event system
+- **gossip-coordination**: In-memory coordinator reference backend, simulation harness (20 sim modules), session management, lease validation, split execution, event system (trait contracts are in gossip-contracts)
 - **gossip-coordination-etcd**: etcd-backed coordination backend (production coordinator)
 - **gossip-connectors**: In-memory, filesystem, and git connectors with scan-driver adapters
 - **gossip-persistence-inmemory**: Reference in-memory persistence backends (`InMemoryDoneLedger`, `InMemoryFindingsSink`) with lattice merge, fault injection, and delayed-completion mode for simulation

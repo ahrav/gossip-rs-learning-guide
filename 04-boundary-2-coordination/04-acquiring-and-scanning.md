@@ -820,7 +820,7 @@ pub struct CapacityHint {
 }
 ```
 
-> **Source:** Defined in `error.rs:1453-1462`. The `#[must_use]` attribute
+> **Source:** Defined in `error.rs:1388-1397`. The `#[must_use]` attribute
 > ensures callers do not silently discard the hint.
 
 When `available_count` is zero and `earliest_deadline` is `Some(t)`, the
@@ -830,7 +830,7 @@ at time `t`. It can sleep until `t` instead of polling. When
 all shards are terminal or the run has no shards, and retrying is unlikely to
 help.
 
-`CapacityHint` provides a `ZERO` sentinel constant (defined at `error.rs:1469`)
+`CapacityHint` provides a `ZERO` sentinel constant (defined at `error.rs:1404`)
 returned when capacity cannot be determined (e.g., the run has no registered
 shards yet). `ZERO` has `available_count: 0` and `earliest_deadline: None`. The
 `is_saturated()` method returns `true` when `available_count == 0`, signaling

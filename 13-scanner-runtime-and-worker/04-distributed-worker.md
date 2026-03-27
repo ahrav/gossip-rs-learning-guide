@@ -279,12 +279,15 @@ The `DistributedRuntimeError` classifies failures by origin:
 ```rust
 pub enum DistributedRuntimeError {
     Coordinator(AnyError),
+    LeaseUncertain(LeaseUncertainty),
     Runtime(ScanRuntimeError),
     Durability(AnyError),
 }
 ```
 
 **`Coordinator`** -- shard claiming, progress lookup, or completion failed. May be transient (network partition) or terminal (run not found).
+
+**`LeaseUncertain`** -- the worker intentionally stopped because the lease is no longer trusted. The inner `LeaseUncertainty` enum distinguishes three causes: `DeadlineElapsed` (the local monotonic deadline check fired before the scan completed), `AdvanceStaleFence` (the coordinator rejected advancement because another worker owns a newer fence epoch), and `AdvanceLeaseExpired` (the coordinator rejected advancement because the lease already expired). In all three cases the worker stops immediately; the shard will be reclaimed by another worker after the lease deadline passes.
 
 **`Runtime`** -- the scan itself failed. Path validation, engine construction, or parallel scanner errors.
 

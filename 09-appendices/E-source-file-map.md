@@ -199,7 +199,7 @@ In-memory reference persistence backends for tests and deterministic simulation.
 
 ### gossip-done-ledger-postgres (Boundary 5 — Postgres done-ledger)
 
-`crates/gossip-done-ledger-postgres/src/` (8 files + `tests/` subdirectory)
+`crates/gossip-done-ledger-postgres/src/` (9 files + `tests/` subdirectory)
 
 Postgres-backed done-ledger implementing the `DoneLedger` trait with the same monotonic lattice merge semantics as the in-memory backend. Production persistence backend for tracking scanned-item status.
 
@@ -348,7 +348,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### scanner-scheduler
 
-`crates/scanner-scheduler/src/` (111 files: 15 top-level + 96 in 7 subdirectories)
+`crates/scanner-scheduler/src/` (110 files: 14 top-level + 96 in 7 subdirectories)
 
 | Source File | Topics |
 |------------|---------|
@@ -365,7 +365,6 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | `crates/scanner-scheduler/src/content_policy.rs` | Content policy enforcement |
 | `crates/scanner-scheduler/src/scratch_memory.rs` | Reusable scratch memory |
 | `crates/scanner-scheduler/src/json_write.rs` | JSON output writing |
-| `crates/scanner-scheduler/src/perf_stats.rs` | Performance statistics |
 | `crates/scanner-scheduler/src/test_utils.rs` | Test utilities |
 | Subdirectories: | `archive/`, `git_scan/`, `scheduler/`, `sim/`, `sim_archive/`, `sim_scanner/`, `sim_scheduler/` |
 
@@ -396,11 +395,15 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-worker
 
-`crates/gossip-worker/src/` (1 file)
+`crates/gossip-worker/src/` (5 files)
 
 | Source File | Topics |
 |------------|---------|
 | `crates/gossip-worker/src/main.rs` | Distributed worker binary entry point |
+| `crates/gossip-worker/src/lib.rs` | Library root, shared worker types |
+| `crates/gossip-worker/src/config.rs` | Worker configuration and env-var parsing |
+| `crates/gossip-worker/src/production.rs` | Production composition root wiring etcd and Postgres backends |
+| `crates/gossip-worker/src/recorder.rs` | Scan result recording |
 
 ### gossip-orchestrator
 
