@@ -10,7 +10,7 @@ The `scanner-git` crate addresses this with an eight-stage pipeline that separat
 
 ## 1. The Module Map
 
-The pipeline spans 106 source files organized by stage. From `lib.rs`, the re-exports are grouped by pipeline phase:
+The pipeline spans 107 source files organized by stage. From `lib.rs`, the re-exports are grouped by pipeline phase:
 
 ```rust
 // ── Stage 1: Repo open & artifact acquisition ──────────────────────────

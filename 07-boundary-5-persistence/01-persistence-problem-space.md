@@ -8,7 +8,7 @@
 
 The failure scenario above distills into a single architectural question: how does a crash-recovering system distinguish completed work from incomplete work, without losing data and without duplicating data? The answer requires three cooperating mechanisms -- a done-ledger for deduplication, a findings sink for idempotent secret persistence, and a commit protocol that orders writes so crash recovery always sees a consistent prefix.
 
-Gossip-rs implements these mechanisms across two crates and two distinct trait surfaces. This chapter maps the full persistence problem space: the two interfaces, the three record layers, the commit ordering protocol, and the conformance harness that proves backends implement the contracts correctly.
+Gossip-rs implements these mechanisms across multiple crates and two distinct trait surfaces. This chapter maps the full persistence problem space: the two interfaces, the three record layers, the commit ordering protocol, and the conformance harness that proves backends implement the contracts correctly.
 
 ## Two Persistence Surfaces
 

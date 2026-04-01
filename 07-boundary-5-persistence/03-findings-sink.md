@@ -471,34 +471,10 @@ The `const fn` constructor and `Copy` derive mean batch creation involves no all
 The batch provides a method that validates the parent-child relationships across all three layers within the batch:
 
 ```rust
-// crates/gossip-contracts/src/persistence/findings.rs:612-660
+// crates/gossip-contracts/src/persistence/findings.rs:736-760
 
 pub fn validate_referential_integrity(self) -> Result<(), PersistenceInputError> {
-    // Tenant consistency: all records must share the same tenant.
-    let expected_tenant = self
-        .findings
-        .first()
-        .map(|f| f.tenant_id())
-        .or_else(|| self.occurrences.first().map(|o| o.tenant_id()))
-        .or_else(|| self.observations.first().map(|o| o.tenant_id()));
-
-    if let Some(expected) = expected_tenant {
-        for f in self.findings {
-            if f.tenant_id() != expected {
-                return Err(PersistenceInputError::InconsistentTenant);
-            }
-        }
-        for occ in self.occurrences {
-            if occ.tenant_id() != expected {
-                return Err(PersistenceInputError::InconsistentTenant);
-            }
-        }
-        for obs in self.observations {
-            if obs.tenant_id() != expected {
-                return Err(PersistenceInputError::InconsistentTenant);
-            }
-        }
-    }
+    self.validate_tenant_consistency()?;
 
     // Referential integrity: occurrences → findings, observations → occurrences.
     let finding_ids: HashSet<_> = self.findings.iter().map(|f| f.finding_id()).collect();
@@ -526,7 +502,7 @@ pub fn validate_referential_integrity(self) -> Result<(), PersistenceInputError>
 
 This method enforces three invariants:
 
-1. **Tenant consistency**: Every record in the batch — across all three layers — must belong to the same tenant. The first non-empty layer's first record establishes the expected `TenantId`; every subsequent record is checked against it.
+1. **Tenant consistency**: Every record in the batch — across all three layers — must belong to the same tenant. The dedicated `validate_tenant_consistency()` method establishes the expected `TenantId` from the first non-empty layer's first record, then checks every subsequent record against it.
 
 2. **Occurrence → Finding referential integrity**: Every `OccurrenceRecord.finding_id` must reference a `FindingRecord` present in the same batch.
 

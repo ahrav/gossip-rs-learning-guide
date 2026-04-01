@@ -420,7 +420,7 @@ returns `Ok(None)` -- the caller retries after more observations accumulate.
 
 ## The Security Model: `open_beneath_root`
 
-This is the function that prevents the symlink-following attack from the opening scenario. Here is the definition from `filesystem.rs:946-1022`:
+This is the function that prevents the symlink-following attack from the opening scenario. Here is the definition from `filesystem.rs:648`:
 
 ```rust
 fn open_beneath_root(&self, ref_bytes: &[u8]) -> Result<(fs::File, fs::Metadata), ReadError> {
@@ -437,7 +437,7 @@ This function implements four layers of defense:
 
 **O_NOFOLLOW at every component.** The `openat` call applies `O_NOFOLLOW` to both intermediate directories and the leaf file. If an attacker replaces an intermediate directory with a symlink (e.g., `sub/` → `/etc/`), the `openat` on `sub` returns `ELOOP`, classified as permanent. Applying `O_NOFOLLOW` only at the final component would leave intermediate symlink replacements undetected.
 
-**O_NONBLOCK on open, then fcntl to clear.** The leaf file is opened with `O_NONBLOCK` to prevent the `open` syscall from blocking indefinitely on FIFOs or device nodes. In a TOCTOU race, a regular file could be replaced with a FIFO between walk and read. Without `O_NONBLOCK`, the `open` on the FIFO would block forever. After validation, `clear_nonblock` (`filesystem.rs:2114-2135`) removes the flag via `fcntl(F_SETFL)` so that subsequent reads use normal blocking semantics.
+**O_NONBLOCK on open, then fcntl to clear.** The leaf file is opened with `O_NONBLOCK` to prevent the `open` syscall from blocking indefinitely on FIFOs or device nodes. In a TOCTOU race, a regular file could be replaced with a FIFO between walk and read. Without `O_NONBLOCK`, the `open` on the FIFO would block forever. After validation, `clear_nonblock` (`filesystem.rs:1181`) removes the flag via `fcntl(F_SETFL)` so that subsequent reads use normal blocking semantics.
 
 **fstat validation.** After opening the leaf, `metadata()` (backed by `fstat`) checks that the opened descriptor refers to a regular file. This catches the case where a file was replaced with a directory, socket, or device node between `openat` and the first read.
 
@@ -449,7 +449,7 @@ Defense-in-depth is provided by the path component rejection (which rejects `.`,
 
 ## Read Path: `open` and `read_range`
 
-The read methods at `filesystem.rs:1091-1129`:
+The read methods at `filesystem.rs:840-856`:
 
 **`open`** opens a fresh file handle via `open_beneath_root`, clears `O_NONBLOCK`, and returns a `Box<dyn io::Read + Send>`. Budget enforcement is left to the runtime layer.
 
@@ -481,64 +481,32 @@ The FD cache entry is naturally invalidated when a `read_range` targets a differ
 
 ---
 
-## Path Encoding: `encode_rel_path`
+## Weak Version IDs: `derive_filesystem_version`
 
-Here is the definition from `filesystem.rs:2026-2048`:
+Here is the definition from `filesystem.rs:950-961`:
 
 ```rust
-fn encode_rel_path(rel: &Path) -> Result<Vec<u8>, EnumerateError> {
-    let mut out = Vec::new();
-    for component in rel.components() {
-        let normal = match component {
-            std::path::Component::Normal(segment) => segment,
-            _ => {
-                return Err(EnumerateError::permanent(format!(
-                    "path contains non-normal component ({})",
-                    ToxicDigest::of_bytes(rel.as_os_str().as_bytes())
-                )));
-            }
-        };
-        if !out.is_empty() {
-            out.push(b'/');
-        }
-        out.extend_from_slice(normal.as_bytes());
-    }
-    if out.is_empty() {
-        return Err(EnumerateError::permanent(
-            "relative file path encoded to an empty key",
-        ));
-    }
-    Ok(out)
+fn derive_filesystem_version(rel_path: &[u8], metadata: &fs::Metadata) -> ObjectVersionId {
+    let mut version_bytes = Vec::with_capacity(rel_path.len() + 48);
+    version_bytes.extend_from_slice(rel_path);
+    version_bytes.push(0);
+    version_bytes.extend_from_slice(&metadata.dev().to_le_bytes());
+    version_bytes.extend_from_slice(&metadata.ino().to_le_bytes());
+    version_bytes.extend_from_slice(&metadata.len().to_le_bytes());
+    version_bytes.extend_from_slice(&metadata.mtime().to_le_bytes());
+    version_bytes.extend_from_slice(&metadata.mtime_nsec().to_le_bytes());
+    version_bytes.extend_from_slice(&metadata.mode().to_le_bytes());
+    ObjectVersionId::from_version_bytes(&version_bytes)
 }
 ```
 
-Only `Component::Normal` segments are accepted -- `.`, `..`, and root prefixes are rejected with error messages using `ToxicDigest` to redact raw paths. Segments are joined with `/` (byte `0x2F`), producing a key whose lexicographic byte order matches the logical path order. The encoding is reversible by splitting on `/`, since Unix filenames cannot contain `/`. Empty paths are rejected because they would produce a zero-length `ItemKey`.
-
----
-
-## Weak Version IDs: `derive_fs_version_id`
-
-Here is the definition from `filesystem.rs:2068-2076`:
-
-```rust
-fn derive_fs_version_id(metadata: &fs::Metadata) -> ObjectVersionId {
-    let mut encoded = [0u8; 40];
-    encoded[0..8].copy_from_slice(&metadata.mtime().to_be_bytes());
-    encoded[8..16].copy_from_slice(&metadata.mtime_nsec().to_be_bytes());
-    encoded[16..24].copy_from_slice(&metadata.len().to_be_bytes());
-    encoded[24..32].copy_from_slice(&metadata.ino().to_be_bytes());
-    encoded[32..40].copy_from_slice(&metadata.dev().to_be_bytes());
-    ObjectVersionId::from_version_bytes(&encoded)
-}
-```
-
-The version ID is a BLAKE3 hash of 40 bytes of file metadata: modification time (seconds and nanoseconds), file length, inode number, and device ID. Including `dev()` ensures distinct version IDs across filesystem mount boundaries where inode numbers can collide. This version is wrapped in `VersionId::Weak` because it does not hash the file's content. The trade-off is deliberate: content hashing during enumeration would require reading every file, destroying the O(metadata) cost of traversal.
+The version ID is a BLAKE3 hash of the relative path bytes (NUL-terminated) concatenated with 48 bytes of file metadata: device ID, inode number, file length, modification time (seconds and nanoseconds), and file mode. Including the relative path ensures that renaming a file (without changing content or metadata) produces a distinct version ID. Including `dev()` ensures distinct version IDs across filesystem mount boundaries where inode numbers can collide. This version is wrapped in `VersionId::Weak` because it does not hash the file's content. The trade-off is deliberate: content hashing during enumeration would require reading every file, destroying the O(metadata) cost of traversal.
 
 ---
 
 ## Error Classification
 
-I/O error classification has moved to `common.rs:620-630`, where it is shared between the filesystem and git connectors:
+I/O error classification has moved to `common.rs:210`, where it is shared between the filesystem and git connectors:
 
 ```rust
 pub(crate) fn is_permanent_io_error(err: &io::Error) -> bool {
@@ -554,11 +522,11 @@ pub(crate) fn is_permanent_io_error(err: &io::Error) -> bool {
 }
 ```
 
-The `is_symlink_loop` helper (`common.rs:634-636`) checks for `ELOOP` via `raw_os_error()` on Unix, with a non-Unix stub that returns `false`.
+The `is_symlink_loop` helper (`common.rs:224`) checks for `ELOOP` via `raw_os_error()` on Unix, with a non-Unix stub that returns `false`.
 
 `NotFound` (file deleted), `PermissionDenied` (access revoked), `ELOOP` (symlink detected by `O_NOFOLLOW`), `NotADirectory` (intermediate path component replaced), and `IsADirectory` (leaf component replaced with a directory) are all permanent. Transient errors like `EAGAIN` or `EWOULDBLOCK` remain retryable.
 
-The classification wrappers `classify_io_enumerate_error` (`common.rs:648-659`) and `classify_io_read_error` (`common.rs:666-676`) redact paths through `ToxicDigest` so raw filesystem paths never appear in error messages.
+The classification wrappers `classify_io_enumerate_error` (`common.rs:238`) and `classify_io_read_error` (`common.rs:256`) redact paths through `ToxicDigest` so raw filesystem paths never appear in error messages.
 
 The `ELOOP` classification deserves special attention. When `openat` is called with `O_NOFOLLOW` on a symlink, the kernel returns `ELOOP`. This is permanent because the symlink is a structural property of the filesystem -- retrying the same path will produce the same result.
 

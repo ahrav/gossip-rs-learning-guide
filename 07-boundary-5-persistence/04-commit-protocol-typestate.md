@@ -215,12 +215,12 @@ No validation is performed on the findings receipt. The findings sink is driven 
 ### Transition 2: FindingsDurable → ItemDurable
 
 ```rust
-// From crates/gossip-contracts/src/persistence/page_commit.rs:401-416
+// From crates/gossip-contracts/src/persistence/page_commit.rs:613-624
     pub fn record_done_ledger(
         self,
         receipt: DoneLedgerCommitReceipt,
     ) -> Result<PageCommit<ItemDurable>, PageCommitValidationError> {
-        let expected = self.scope.committed_units();
+        let expected = self.scope.committed_units().get();
         let actual = receipt.record_count();
         if expected != actual {
             return Err(PageCommitValidationError::LedgerUnitCountMismatch { expected, actual });
