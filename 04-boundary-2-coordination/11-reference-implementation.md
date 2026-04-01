@@ -1212,7 +1212,7 @@ stores. The relationship between the reference and production backends is:
    storage-layer bugs.
 
 The conformance test suite (described in
-[Chapter 12: Verification Roadmap](./12-verification-roadmap.md)) feeds
+[Chapter 12: Proving Correctness](./12-proving-correctness.md)) feeds
 identical operation sequences to every backend and compares outputs. The
 deterministic simulation (described in the simulation harness docs) goes
 further, injecting failures and verifying that invariants hold across

@@ -164,7 +164,7 @@ impl TenantSecretKey {
 The `SecretHash` is derived using the tenant's secret key:
 
 ```rust
-// From crates/gossip-contracts/src/identity/finding.rs:327-335
+// From crates/gossip-contracts/src/identity/finding.rs:352
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
     let mut h = Hasher::new_keyed(key.as_bytes());
     // Domain tag fed as *data* inside the keyed hasher (not derive-key context),
@@ -182,7 +182,7 @@ pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
 The `FindingId` includes all four fields from `FindingIdInputs`:
 
 ```rust
-// From crates/gossip-contracts/src/identity/finding.rs:186-196, 320-322
+// From crates/gossip-contracts/src/identity/finding.rs:255-269, 386
 pub struct FindingIdInputs {
     pub tenant: TenantId,
     pub item: StableItemId,

@@ -189,7 +189,7 @@ fn connector_tag_debug_nonzero_after_nul() {
 
 **Purpose:** Hashes variable-length connector instance identifiers into a fixed-width 32-byte value. Keeps `ItemIdentityKey` framing simple and prevents identity collisions when two instances scan the same locator under the same connector tag.
 
-**Source:** `item.rs:273-313`
+**Source:** `item.rs:249-285`
 
 ```rust
 crate::define_id_32! {
@@ -200,7 +200,7 @@ crate::define_id_32! {
 
 ### Derivation
 
-**Method:** `ConnectorInstanceIdHash::from_instance_id_bytes(instance_id: &[u8])` (source: `item.rs:290-298`)
+**Method:** `ConnectorInstanceIdHash::from_instance_id_bytes(instance_id: &[u8])` (source: `item.rs:269-275`)
 
 ```rust
 pub fn from_instance_id_bytes(instance_id: &[u8]) -> Self {
@@ -223,7 +223,7 @@ pub fn from_instance_id_bytes(instance_id: &[u8]) -> Self {
 4. Finalize to 32 bytes
 5. Wrap in `ConnectorInstanceIdHash` newtype
 
-**Fallible variant:** `try_from_instance_id_bytes` (source: `item.rs:306-313`)
+**Fallible variant:** `try_from_instance_id_bytes` (source: `item.rs:285-293`)
 
 ```rust
 pub fn try_from_instance_id_bytes(instance_id: &[u8]) -> Result<Self, IdentityInputError> {
@@ -248,7 +248,7 @@ let instance = ConnectorInstanceIdHash::from_instance_id_bytes(b"github-installa
 
 **Purpose:** The full, human-meaningful identity of a scannable item. Carries enough information to uniquely locate an item across all connectors.
 
-**Source:** `item.rs:320-413`
+**Source:** `item.rs:340-464`
 
 ### Structure
 
@@ -291,7 +291,7 @@ Panics if `locator` is empty. An empty locator is a programming error in the con
 
 ### Accessors
 
-**Source:** `item.rs:441-460`
+**Source:** `item.rs:419-451`
 
 ```rust
 impl ItemIdentityKey {
@@ -346,7 +346,7 @@ Use this at system boundaries where the locator comes from external input.
 
 ### CanonicalBytes Encoding
 
-**Source:** `item.rs:474-485`
+**Source:** `item.rs:453-464`
 
 ```rust
 impl CanonicalBytes for ItemIdentityKey {
@@ -400,7 +400,7 @@ fn item_identity_key_canonical_bytes_unambiguous() {
 
 **Purpose:** Fixed-width item identity for use in derivation chains. Derived from `ItemIdentityKey` via BLAKE3.
 
-**Source:** `item.rs:491-509`
+**Source:** `item.rs:470-488`
 
 ```rust
 crate::define_id_32! {
@@ -413,7 +413,7 @@ crate::define_id_32! {
 
 ### Derivation
 
-**Method:** `ItemIdentityKey::stable_id()` (source: `item.rs:467-471`)
+**Method:** `ItemIdentityKey::stable_id()` (source: `item.rs:446-450`)
 
 ```rust
 impl ItemIdentityKey {
@@ -469,7 +469,7 @@ assert_eq!(id_tenant_a, id_tenant_b);  // Same StableItemId
 
 ### Property Tests
 
-**Purity** (`item.rs:771-784`):
+**Purity** (`item.rs:750-765`):
 ```rust
 proptest! {
     #[test]
@@ -490,7 +490,7 @@ proptest! {
 }
 ```
 
-**Collision-freedom** (`item.rs:844-868`):
+**Collision-freedom** (`item.rs:823-895`):
 ```rust
 proptest! {
     #[test]
@@ -519,7 +519,7 @@ proptest! {
 
 **Purpose:** Identity of a specific version of a scannable item's content.
 
-**Source:** `item.rs:515-547`
+**Source:** `item.rs:494-526`
 
 ```rust
 crate::define_id_32! {
@@ -538,7 +538,7 @@ crate::define_id_32! {
 
 ### Derivation
 
-**Method:** `ObjectVersionId::from_version_bytes(version_bytes: &[u8])` (source: `item.rs:580-585`)
+**Method:** `ObjectVersionId::from_version_bytes(version_bytes: &[u8])` (source: `item.rs:559-564`)
 
 ```rust
 pub fn from_version_bytes(version_bytes: &[u8]) -> Self {
@@ -568,7 +568,7 @@ graph LR
     style D fill:#4682B4
 ```
 
-**Fallible variant:** `try_from_version_bytes` (source: `item.rs:597-604`)
+**Fallible variant:** `try_from_version_bytes` (source: `item.rs:576-583`)
 
 ```rust
 pub fn try_from_version_bytes(version_bytes: &[u8]) -> Result<Self, IdentityInputError> {
@@ -618,7 +618,7 @@ assert_ne!(occ_a, occ_b);      // Different occurrences
 
 ### Property Tests
 
-**Purity** (`item.rs:656-663`):
+**Purity** (`item.rs:766-780`):
 ```rust
 proptest! {
     #[test]
@@ -630,7 +630,7 @@ proptest! {
 }
 ```
 
-**Collision-freedom** (`item.rs:732-743`):
+**Collision-freedom** (`item.rs:886-896`):
 ```rust
 proptest! {
     #[test]

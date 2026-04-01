@@ -207,7 +207,7 @@ graph LR
     style E fill:#9370DB
 ```
 
-**Source:** `finding.rs:327-335`
+**Source:** `finding.rs:352`
 
 ```rust
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
@@ -239,7 +239,7 @@ graph TD
     style G fill:#9370DB
 ```
 
-**Source:** `finding.rs:361-363`
+**Source:** `finding.rs:386`
 
 ```rust
 pub fn derive_finding_id(inputs: &FindingIdInputs) -> FindingId {
@@ -247,7 +247,7 @@ pub fn derive_finding_id(inputs: &FindingIdInputs) -> FindingId {
 }
 ```
 
-**Inputs struct** (`finding.rs:230-239`):
+**Inputs struct** (`finding.rs:255-269`):
 ```rust
 pub struct FindingIdInputs {
     pub tenant: TenantId,          // Who owns the scan
@@ -275,7 +275,7 @@ graph TD
     style G fill:#BA55D3
 ```
 
-**Source:** `finding.rs:384-386`
+**Source:** `finding.rs:409`
 
 ```rust
 pub fn derive_occurrence_id(inputs: &OccurrenceIdInputs) -> OccurrenceId {
@@ -283,7 +283,7 @@ pub fn derive_occurrence_id(inputs: &OccurrenceIdInputs) -> OccurrenceId {
 }
 ```
 
-**Inputs struct** (`finding.rs:260-269`):
+**Inputs struct** (`finding.rs:285-295`):
 ```rust
 pub struct OccurrenceIdInputs {
     pub finding: FindingId,           // Version-stable finding
@@ -316,7 +316,7 @@ graph TD
     style H fill:#4682B4
 ```
 
-**Source:** `item.rs:467-471`
+**Source:** `item.rs:446`
 
 ```rust
 impl ItemIdentityKey {
@@ -328,7 +328,7 @@ impl ItemIdentityKey {
 }
 ```
 
-**Source:** `item.rs:580-585`
+**Source:** `item.rs:559-583`
 
 ```rust
 impl ObjectVersionId {
@@ -393,7 +393,7 @@ pub struct PolicyHashInputs {
 - Commit B: New `FindingId(tenant=X, item=Y, rule=Z, secret=S, version=B)` → triage state = **unknown** (new finding)
 - Security team gets re-alerted for the same accepted test key
 
-**Implementation detail** (`finding.rs:230-239`):
+**Implementation detail** (`finding.rs:255-269`):
 ```rust
 pub struct FindingIdInputs {
     pub tenant: TenantId,
@@ -404,7 +404,7 @@ pub struct FindingIdInputs {
 }
 ```
 
-**Version-specific info goes in `OccurrenceId`** (`finding.rs:260-269`):
+**Version-specific info goes in `OccurrenceId`** (`finding.rs:285-295`):
 ```rust
 pub struct OccurrenceIdInputs {
     pub finding: FindingId,        // Inherited triage state

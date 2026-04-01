@@ -71,7 +71,7 @@ let norm = NormHash::from_digest([0xAB; 32]);
 
 **Purpose:** Tenant-scoped secret identity. Derived by keying a `NormHash` with a `TenantSecretKey`.
 
-**Source:** `finding.rs:110-128`
+**Source:** `finding.rs:111-133`
 
 ```rust
 crate::define_id_32_restricted! {
@@ -83,7 +83,7 @@ crate::define_id_32_restricted! {
 
 ### Derivation: `key_secret_hash`
 
-**Source:** `finding.rs:327-335`
+**Source:** `finding.rs:352`
 
 ```rust
 pub fn key_secret_hash(key: &TenantSecretKey, norm: &NormHash) -> SecretHash {
@@ -156,7 +156,7 @@ assert_ne!(secret_a, secret_b);  // Different SecretHash despite same NormHash
 
 **Purpose:** Identity of a detection rule. The engine/policy layer computes rule fingerprints externally; the contracts crate treats them as opaque.
 
-**Source:** `finding.rs:134-147`
+**Source:** `finding.rs:135-166`
 
 ```rust
 crate::define_id_32! {
@@ -173,7 +173,7 @@ crate::define_id_32! {
 
 **Purpose:** Captures "rule R found secret S in item I for tenant T" — true regardless of version.
 
-**Source:** `finding.rs:153-168`
+**Source:** `finding.rs:178-197`
 
 ```rust
 crate::define_id_32! {
@@ -184,7 +184,7 @@ crate::define_id_32! {
 
 ### Inputs
 
-**Source:** `finding.rs:230-239`
+**Source:** `finding.rs:255-269`
 
 ```rust
 pub struct FindingIdInputs {
@@ -201,7 +201,7 @@ pub struct FindingIdInputs {
 
 ### Derivation
 
-**Source:** `finding.rs:361-363`
+**Source:** `finding.rs:386-388`
 
 ```rust
 pub fn derive_finding_id(inputs: &FindingIdInputs) -> FindingId {
@@ -250,7 +250,7 @@ graph TD
 
 ### Property Tests
 
-**Purity** (`finding.rs:474-489`):
+**Purity** (`finding.rs:530-546`):
 ```rust
 proptest! {
     #[test]
@@ -271,7 +271,7 @@ proptest! {
 }
 ```
 
-**Collision-freedom** (`finding.rs:547-571`):
+**Collision-freedom** (`finding.rs:603-630`):
 ```rust
 proptest! {
     #[test]
@@ -289,15 +289,15 @@ proptest! {
 }
 ```
 
-**Field sensitivity** (`finding.rs:634-733`): Four tests (one per field) verify that changing any single field changes the `FindingId`.
+**Field sensitivity** (`finding.rs:698+`): Four tests (one per field) verify that changing any single field changes the `FindingId`.
 
-**Field order** (`finding.rs:952-966`): Verifies swapping two fields produces a different hash.
+**Field order** (`finding.rs:1008-1022`): Verifies swapping two fields produces a different hash.
 
 ## OccurrenceId: Version-Specific Occurrence Location
 
 **Purpose:** Ties a `FindingId` to a specific version and byte range within the scanned content.
 
-**Source:** `finding.rs:174-189`
+**Source:** `finding.rs:199-218`
 
 ```rust
 crate::define_id_32! {
@@ -308,7 +308,7 @@ crate::define_id_32! {
 
 ### Inputs
 
-**Source:** `finding.rs:260-269`
+**Source:** `finding.rs:285-312`
 
 ```rust
 pub struct OccurrenceIdInputs {
@@ -323,7 +323,7 @@ pub struct OccurrenceIdInputs {
 
 ### Derivation
 
-**Source:** `finding.rs:384-386`
+**Source:** `finding.rs:409-411`
 
 ```rust
 pub fn derive_occurrence_id(inputs: &OccurrenceIdInputs) -> OccurrenceId {
@@ -385,7 +385,7 @@ assert_ne!(occ_a, occ_b);  // Different occurrences, same finding
 
 ### Property Tests
 
-**Purity** (`finding.rs:492-508`):
+**Purity** (`finding.rs:548-565`):
 ```rust
 proptest! {
     #[test]
@@ -406,9 +406,9 @@ proptest! {
 }
 ```
 
-**Collision-freedom** (`finding.rs:574-599`): Verifies distinct inputs produce distinct `OccurrenceId` values.
+**Collision-freedom** (`finding.rs:630-657`): Verifies distinct inputs produce distinct `OccurrenceId` values.
 
-**Field sensitivity** (`finding.rs:774-872`): Four tests verify that changing any single field changes the `OccurrenceId`.
+**Field sensitivity** (`finding.rs:830+`): Four tests verify that changing any single field changes the `OccurrenceId`.
 
 **Boundary values** (`golden.rs:400-435`): Tests `u64::MIN`, `u64::MAX`, and mixed boundary cases.
 
@@ -416,7 +416,7 @@ proptest! {
 
 **Purpose:** Distinguishes "policy A detected occurrence O" from "policy B detected the same occurrence O" without changing the underlying `FindingId` or `OccurrenceId` derivations.
 
-**Source:** `finding.rs:195-211`
+**Source:** `finding.rs:220-240`
 
 ```rust
 crate::define_id_32! {
@@ -427,7 +427,7 @@ crate::define_id_32! {
 
 ### Inputs
 
-**Source:** `finding.rs:289-297`
+**Source:** `finding.rs:314-348`
 
 ```rust
 pub struct ObservationIdInputs {
@@ -443,7 +443,7 @@ pub struct ObservationIdInputs {
 
 ### Derivation
 
-**Source:** `finding.rs:406-408`
+**Source:** `finding.rs:431-433`
 
 ```rust
 pub fn derive_observation_id(inputs: &ObservationIdInputs) -> ObservationId {
@@ -502,13 +502,13 @@ assert_ne!(obs_a, obs_b);  // Different observations, same occurrence
 
 ### Property Tests
 
-**Purity** (`finding.rs:510-526`): Verifies identical inputs produce identical `ObservationId` values.
+**Purity** (`finding.rs:566-583`): Verifies identical inputs produce identical `ObservationId` values.
 
-**Collision-freedom** (`finding.rs:601-623`): Verifies distinct inputs produce distinct `ObservationId` values.
+**Collision-freedom** (`finding.rs:657-682`): Verifies distinct inputs produce distinct `ObservationId` values.
 
-**Field sensitivity** (`finding.rs:874-943`): Three tests verify that changing any single field (tenant, policy, occurrence) changes the `ObservationId`.
+**Field sensitivity** (`finding.rs:937+`): Three tests verify that changing any single field (tenant, policy, occurrence) changes the `ObservationId`.
 
-**Field order** (`finding.rs:989-1003`): Verifies swapping two fields produces a different hash.
+**Field order** (`finding.rs:1045+`): Verifies swapping two fields produces a different hash.
 
 ## Derivation Chain Summary
 
