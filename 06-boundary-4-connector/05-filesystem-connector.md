@@ -51,7 +51,9 @@ pub struct FilesystemConnector {
     root: PathBuf,
     walk_key_range_start: Option<Box<[u8]>>,
     walk_key_range_end: Option<Box<[u8]>>,
-    /// Directory fd for the canonical root, opened lazily.
+    root_mode: Option<RootMode>,
+    connector_instance: Option<ConnectorInstanceIdHash>,
+    /// Directory fd for canonical directory roots, opened lazily.
     root_fd: Option<OwnedFd>,
     /// Single-entry FD cache for sequential `read_range` calls.
     cached_file: Option<CachedFile>,
@@ -61,11 +63,15 @@ pub struct FilesystemConnector {
 }
 ```
 
-Six fields, each with a clear role:
+Eight fields, each with a clear role:
 
 - **`root: PathBuf`** -- The directory root passed at construction. On the first operation that needs the filesystem, this is canonicalized via `fs::canonicalize` to resolve relative paths and root-level symlinks. Canonicalization prevents cwd drift: if the process working directory changes after construction, the connector still opens files from the correct absolute path.
 
 - **`walk_key_range_start` / `walk_key_range_end: Option<Box<[u8]>>`** -- Connector-level key-range bounds, set via `with_key_range()`. These are intersected with per-request shard bounds before split-point selection.
+
+- **`root_mode: Option<RootMode>`** -- Tracks whether the root is a directory or a single file. Lazily determined on first use. When the root is a single file, enumeration produces exactly one item; when it is a directory, the connector walks the subtree.
+
+- **`connector_instance: Option<ConnectorInstanceIdHash>`** -- Precomputed hash for `StableItemId` derivation. Combines the connector tag and the canonical root path into a single identity component. Lazily computed alongside root canonicalization so that items from distinct connector roots produce disjoint identity hashes.
 
 - **`root_fd: Option<OwnedFd>`** -- A directory file descriptor for the canonicalized root, opened lazily by `ensure_root_fd`. All read-path operations use `openat` relative to this fd, confining file access to the subtree under the root.
 

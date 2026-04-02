@@ -162,10 +162,10 @@ The modules compose in a layered dependency order:
   |   Capabilities       | | |   RepoKey, RepoLocator,|
   | OrderedContent       | | |   GitRepoTarget,       |
   |   Source trait        | | |   GitRepoDiscovery     |
-  | (fill_page, open,    | | |   Source, GitMirror     |
-  |  read_range)         | | |   Manager, GitRepo     |
-  +---------------------+ | |   Executor             |
-                           | +------------------------+
+  | (fill_page,          | | |   Source, GitMirror     |
+  |  choose_split_point, | | |   Manager, GitRepo     |
+  |  open, read_range)   | | |   Executor             |
+  +---------------------+ | +------------------------+
                            v
   Layer 4c: conformance.rs (pub)
   +-------------------------------------------------+
@@ -315,7 +315,7 @@ The dependency direction is strict and uni-directional:
   Tier 1: gossip-connectors (filesystem, git, in-memory), ...
   +----------------------------------------------+
   | FilesystemConnector (ordered-content family)  |
-  | GitConnector        (ordered-content family)  |
+  | GitConnector        (inherent methods only)   |
   | InMemoryDeterministicConnector                |
   +----------------------------------------------+
 ```

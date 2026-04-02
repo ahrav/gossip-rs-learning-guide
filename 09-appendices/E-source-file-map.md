@@ -144,8 +144,8 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-contracts/src/connector/api_tests.rs` | 06-03 | Connector API tests |
 | `crates/gossip-contracts/src/connector/common.rs` | 06-01 | Shared connector contract utilities |
 | `crates/gossip-contracts/src/connector/common_tests.rs` | 06-01 | Common connector contract tests |
-| `crates/gossip-contracts/src/connector/git.rs` | 06-07 | Git-specific connector contract types |
-| `crates/gossip-contracts/src/connector/ordered.rs` | 06-07 | OrderedContentSource trait for deterministic enumeration |
+| `crates/gossip-contracts/src/connector/git.rs` | 06-06 | Git-specific connector contract types |
+| `crates/gossip-contracts/src/connector/ordered.rs` | 06-03 | OrderedContentSource trait for deterministic enumeration |
 | `crates/gossip-contracts/src/connector/types.rs` | 06-01, 06-02 | ScanItem, ItemRef, Budgets, ConnectorCapabilities, ErrorClass, ItemKey, TokenBytes |
 | `crates/gossip-contracts/src/connector/types_tests.rs` | 06-01, 06-02 | Connector type tests |
 | `crates/gossip-contracts/src/connector/conformance.rs` | 06-01 | Ordered-content conformance harness |
@@ -184,6 +184,8 @@ In-memory reference persistence backends for tests and deterministic simulation.
 | `crates/gossip-persistence-inmemory/src/pending.rs` | 07-05 | Pending commit tracking and notification |
 | `crates/gossip-persistence-inmemory/src/error.rs` | 07-05 | Persistence error types for in-memory backend |
 | `crates/gossip-persistence-inmemory/src/tests.rs` | 07-05, 07-06 | Integration, behavioral, and conformance tests |
+| `crates/gossip-persistence-inmemory/tests/conformance.rs` | 07-06 | External conformance test suite |
+| `crates/gossip-persistence-inmemory/tests/differential_oracle.rs` | 07-06 | Differential oracle tests for persistence correctness |
 
 #### gossip-persistence-inmemory Simulation Harness
 
@@ -293,15 +295,15 @@ Shared Postgres infrastructure (connection pooling, migration runner, test suppo
 | Source File | Primary Chapters | Topics |
 |------------|------------------|---------|
 | `crates/gossip-connectors/src/lib.rs` | 06-01 | Crate root, connector registrations |
-| `crates/gossip-connectors/src/common.rs` | 06-06, 06-07 | Shared connector utilities |
-| `crates/gossip-connectors/src/filesystem.rs` | 06-07 | FilesystemConnector, local directory tree enumeration |
-| `crates/gossip-connectors/src/filesystem_tests.rs` | 06-07 | FilesystemConnector tests |
-| `crates/gossip-connectors/src/git.rs` | 06-07 | Git connector, bridges scanner-git to connector boundary |
-| `crates/gossip-connectors/src/git_tests.rs` | 06-07 | Git connector tests |
-| `crates/gossip-connectors/src/in_memory.rs` | 06-06 | In-memory connector for testing |
-| `crates/gossip-connectors/src/in_memory_tests.rs` | 06-06 | In-memory connector tests |
-| `crates/gossip-connectors/src/split_estimator.rs` | 06-07 | Split estimator for dynamic shard splitting hints |
-| `crates/gossip-connectors/src/split_estimator_tests.rs` | 06-07 | Split estimator tests |
+| `crates/gossip-connectors/src/common.rs` | 06-05, 06-06 | Shared connector utilities |
+| `crates/gossip-connectors/src/filesystem.rs` | 06-05 | FilesystemConnector, local directory tree enumeration |
+| `crates/gossip-connectors/src/filesystem_tests.rs` | 06-05 | FilesystemConnector tests |
+| `crates/gossip-connectors/src/git.rs` | 06-06 | Git connector, bridges scanner-git to connector boundary |
+| `crates/gossip-connectors/src/git_tests.rs` | 06-06 | Git connector tests |
+| `crates/gossip-connectors/src/in_memory.rs` | 06-04 | In-memory connector for testing |
+| `crates/gossip-connectors/src/in_memory_tests.rs` | 06-04 | In-memory connector tests |
+| `crates/gossip-connectors/src/split_estimator.rs` | 06-05 | Split estimator for dynamic shard splitting hints |
+| `crates/gossip-connectors/src/split_estimator_tests.rs` | 06-05 | Split estimator tests |
 
 ### scanner-engine
 
@@ -407,7 +409,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-orchestrator
 
-`crates/gossip-orchestrator/src/` (6 files)
+`crates/gossip-orchestrator/src/` (8 files)
 
 High-level orchestration for multi-source scan coordination. Plans scan jobs, constructs runtime payloads, and drives setup for distributed scan execution.
 
@@ -415,8 +417,10 @@ High-level orchestration for multi-source scan coordination. Plans scan jobs, co
 |------------|---------|
 | `crates/gossip-orchestrator/src/lib.rs` | Crate root, module declarations |
 | `crates/gossip-orchestrator/src/payload.rs` | Scan payload types for runtime dispatch |
+| `crates/gossip-orchestrator/src/git_payload.rs` | Git-specific scan payload types |
 | `crates/gossip-orchestrator/src/planner.rs` | Scan job planning and scheduling |
 | `crates/gossip-orchestrator/src/request.rs` | Scan request types |
+| `crates/gossip-orchestrator/src/git_request.rs` | Git-specific scan request types |
 | `crates/gossip-orchestrator/src/setup.rs` | Runtime setup and configuration |
 | `crates/gossip-orchestrator/src/test_support.rs` | Test support utilities |
 
@@ -670,6 +674,7 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - **06-03: Split, Read, and Capability Methods**
   - `crates/gossip-contracts/src/connector/api.rs` (Error taxonomy (ErrorClass, EnumerateError, ReadError) and capability negotiation (ConnectorCapabilities))
   - `crates/gossip-contracts/src/connector/api_tests.rs` (Connector API tests)
+  - `crates/gossip-contracts/src/connector/ordered.rs` (OrderedContentSource trait)
 
 - **06-04: In-Memory Deterministic Connector**
   - `crates/gossip-connectors/src/in_memory.rs` (InMemoryConnector for testing)
@@ -901,7 +906,6 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 
 **`crates/gossip-contracts/src/connector/mod.rs`**:
 - Overview: Chapter 06-01 (Connector Problem Space)
-- Circuit breaker: Chapter 06-05 (Circuit Breaker Design)
 
 **`crates/gossip-contracts/src/connector/types.rs`**:
 - Overview: Chapter 06-01 (Connector Problem Space)
@@ -911,13 +915,13 @@ Test directories include: `chunked_file_scans.rs`, `corpus/`, `diagnostic/`, `in
 - Error taxonomy and capabilities: Chapter 06-03 (Split, Read, and Capability Methods)
 
 **`crates/gossip-connectors/src/in_memory.rs`**:
-- Overview: Chapter 06-05 (In-Memory Deterministic Connector)
+- Overview: Chapter 06-04 (In-Memory Deterministic Connector)
 
 **`crates/gossip-connectors/src/filesystem.rs`**:
-- Overview: Chapter 06-06 (Filesystem Connector)
+- Overview: Chapter 06-05 (Filesystem Connector)
 
 **`crates/gossip-connectors/src/git.rs`**:
-- Overview: Chapter 06-07 (Git Connector)
+- Overview: Chapter 06-06 (Git Connector)
 
 **`crates/gossip-contracts/src/persistence/mod.rs`**:
 - Overview: Chapter 07-01 (Persistence Problem Space)

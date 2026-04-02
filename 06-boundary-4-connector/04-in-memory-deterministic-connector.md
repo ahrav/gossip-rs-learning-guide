@@ -242,13 +242,16 @@ Here is the definition from `in_memory.rs`:
 
 ## How Items Are Scanned
 
-The in-memory connector does not expose an enumeration method. Instead, the
-scanner runtime constructs the connector from configuration and drives
-scanning through direct runtime dispatch. The runtime iterates the sorted
-item array sequentially, calling `commit.begin_item()` /
-`commit.finish_item()` per item through the `CommitSink` protocol. The
-connector's `open()` and `read_range()` methods provide content access when
-the runtime needs to feed item bytes to the scanner engine.
+The in-memory connector does not implement `OrderedContentSource` and does
+not have a `fill_page` method. Instead, the scanner runtime constructs the
+connector from configuration and drives scanning through direct runtime
+dispatch. The runtime iterates the sorted item array sequentially, using the
+connector's `open()` and `read_range()` methods to provide content access
+when feeding item bytes to the scanner engine. The runtime manages item
+lifecycle through its own `CommitSink` trait (defined in
+`gossip-scanner-runtime/src/commit_sink.rs`), calling
+`begin_item(item_key, meta)` before scanning an item and
+`finish_item(item_key)` after scanning completes.
 
 The shared helpers in `common.rs` -- `resolve_bounds`, `key_resume_start`,
 `lower_bound`, `upper_bound` -- still handle shard-boundary resolution and

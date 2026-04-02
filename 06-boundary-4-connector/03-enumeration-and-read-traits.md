@@ -138,18 +138,23 @@ avoids a single monolithic trait.
 The `OrderedContentSource` trait in `connector::ordered` provides the formal
 polymorphism boundary for ordered-content connectors. It defines `fill_page`
 for page-based enumeration alongside `open`, `read_range`, and
-`choose_split_point`. The Git family has its own trait surface in
+`choose_split_point`. Currently, only `FilesystemConnector` implements
+`OrderedContentSource`. The Git family has its own trait surface in
 `connector::git` because whole-repository execution does not fit the
-ordered-content model.
+ordered-content model. `GitConnector` and `InMemoryDeterministicConnector`
+provide the four shared methods as inherent methods only -- they do not
+implement the trait.
 
 The three concrete connectors are:
 
 - **`FilesystemConnector`** -- Unix-only connector using `openat`-based
-  traversal with symlink confinement.
+  traversal with symlink confinement. Implements `OrderedContentSource`.
 - **`GitConnector`** -- Indexes tracked files via `git ls-files -z` with
-  lazy tri-state lifecycle management.
+  lazy tri-state lifecycle management. Provides shared methods as inherent
+  `pub fn` but does not implement `OrderedContentSource`.
 - **`InMemoryDeterministicConnector`** -- Deterministic in-memory connector
-  for test harnesses and simulation workloads.
+  for test harnesses and simulation workloads. Provides shared methods as
+  inherent `pub fn` but does not implement `OrderedContentSource`.
 
 ---
 
