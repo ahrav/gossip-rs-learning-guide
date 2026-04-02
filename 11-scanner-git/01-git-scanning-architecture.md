@@ -10,7 +10,7 @@ The `scanner-git` crate addresses this with an eight-stage pipeline that separat
 
 ## 1. The Module Map
 
-The pipeline spans 107 source files organized by stage. From `lib.rs`, the re-exports are grouped by pipeline phase:
+The pipeline spans 109 source files organized by stage. From `lib.rs`, the re-exports are grouped by pipeline phase:
 
 ```rust
 // ── Stage 1: Repo open & artifact acquisition ──────────────────────────
@@ -140,6 +140,7 @@ The dispatcher in `run_git_scan` selects between them:
             &repo,
             std::sync::Arc::clone(&engine),
             seen_store,
+            seen_persister,
             &cg_index,
             &plan,
             config,
@@ -149,6 +150,7 @@ The dispatcher in `run_git_scan` selects between them:
             &repo,
             std::sync::Arc::clone(&engine),
             seen_store,
+            seen_persister,
             &cg,
             &plan,
             config,

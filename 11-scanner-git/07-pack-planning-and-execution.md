@@ -305,6 +305,8 @@ pub enum SkipReason {
 
 Non-blob objects (commits, trees, tags) are recorded as `SkipReason::NotBlob` rather than treated as errors. The executor continues past decode failures, collecting all skip records for the final report.
 
+**Parallel execution strategies.** When multiple packs need processing, `runner_exec_scheduler.rs` selects an execution strategy based on the plan structure: `Serial` processes packs sequentially (the default), `PackParallel` runs independent packs concurrently, and `IntraPackSharded` partitions large packs by offset range for parallel decode within a single pack. The scheduler picks the strategy automatically based on pack count and candidate density.
+
 ## 8. The Engine Adapter
 
 The `EngineAdapter` bridges decoded pack bytes into the detection engine. From `engine_adapter.rs`:

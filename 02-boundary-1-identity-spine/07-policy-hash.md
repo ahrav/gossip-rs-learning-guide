@@ -304,14 +304,19 @@ pub fn finalize_64(hasher: &Hasher) -> u64 {
 **Used by:**
 - Split shard ID derivation (via `SPLIT_ID_HASHER`) — generating derived `ShardId` values when splitting shards
 - Op-log payload hashing (via `OP_PAYLOAD_HASHER`) — computing content digests for idempotency checks
+- Repository ID derivation (via `REPO_ID_HASHER`) — producing stable 64-bit repo identities for Git connector scans
 
-## SPLIT_ID_HASHER and OP_PAYLOAD_HASHER: Public Cached Hashers
+## Public Cached Hashers
 
-**Source:** `hashing.rs:77-82`
+**Source:** `hashing.rs:89-107`
 
-Most cached hashers in `hashing.rs` are `pub(crate)` (used only within `gossip-contracts`). Two are **`pub`** because they are consumed by the coordination subsystem in `gossip-coordination`:
+Most cached hashers in `hashing.rs` are `pub(crate)` (used only within `gossip-contracts`). Five are **`pub`** because they are consumed by subsystems outside the contracts crate — coordination, the scanner engine, and the Git connector:
 
 ```rust
+/// Cached derive-key hasher for rule-fingerprint derivation.
+pub static RULE_FINGERPRINT_HASHER: LazyLock<Hasher> =
+    LazyLock::new(|| Hasher::new_derive_key(domain::RULE_FINGERPRINT_V1));
+
 /// Cached derive-key hasher for split shard-ID derivation.
 pub static SPLIT_ID_HASHER: LazyLock<Hasher> =
     LazyLock::new(|| Hasher::new_derive_key(domain::SPLIT_ID_V1));
@@ -319,9 +324,17 @@ pub static SPLIT_ID_HASHER: LazyLock<Hasher> =
 /// Cached derive-key hasher for op-log payload hashing.
 pub static OP_PAYLOAD_HASHER: LazyLock<Hasher> =
     LazyLock::new(|| Hasher::new_derive_key(domain::OP_PAYLOAD_V1));
+
+/// Cached derive-key hasher for tenant-scoped Git repository-ID derivation.
+pub static REPO_ID_HASHER: LazyLock<Hasher> =
+    LazyLock::new(|| Hasher::new_derive_key(domain::GIT_REPO_ID_V1));
+
+/// Cached derive-key hasher for deterministic Git mirror-cache path derivation.
+pub static MIRROR_PATH_HASHER: LazyLock<Hasher> =
+    LazyLock::new(|| Hasher::new_derive_key(domain::GIT_MIRROR_PATH_V1));
 ```
 
-**Usage pattern:** The coordination layer clones these pre-initialized hashers, feeds in structured input via `CanonicalBytes`, then calls `finalize_64` to produce a `u64` result:
+**Usage pattern:** Callers clone a pre-initialized hasher, feed structured input via `CanonicalBytes`, then finalize to the required width (`finalize_64` for a `u64`, `finalize_32` for a full 256-bit digest):
 
 ```rust
 // Conceptual usage in gossip-coordination:
@@ -335,8 +348,11 @@ The `| (1u64 << 63)` forces bit 63 high, marking the result as a derived shard (
 
 | Hasher | Domain Constant | Finalization | Used For |
 |--------|----------------|--------------|----------|
+| `RULE_FINGERPRINT_HASHER` | `RULE_FINGERPRINT_V1` | `finalize_32` | Rule identity derivation for the scanner engine |
 | `SPLIT_ID_HASHER` | `SPLIT_ID_V1` | `finalize_64` | Deriving child shard IDs during shard splits |
 | `OP_PAYLOAD_HASHER` | `OP_PAYLOAD_V1` | `finalize_64` | Op-log payload content hashing for idempotency |
+| `REPO_ID_HASHER` | `GIT_REPO_ID_V1` | `finalize_64` | Stable repository identity for Git connector scans |
+| `MIRROR_PATH_HASHER` | `GIT_MIRROR_PATH_V1` | `finalize_32` | Mirror-cache path derivation for local Git clones |
 
 ## PolicyHash Interaction with Other Systems
 

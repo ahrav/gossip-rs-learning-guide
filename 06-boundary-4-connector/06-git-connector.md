@@ -321,5 +321,5 @@ versioning from `(path, size, mtime)` provides change detection without
 content hashing. Read-time containment re-canonicalizes
 paths before every open to catch symlink escapes created after indexing.
 
-Chapter 8 covers the connector dispatch architecture and how these
-connectors integrate with the scanner runtime.
+The scanner runtime section (Section 13) covers the connector dispatch
+architecture and how these connectors integrate with the runtime.

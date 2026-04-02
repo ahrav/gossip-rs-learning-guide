@@ -18,7 +18,7 @@ These primitives are the leaf of the boundary dependency graph. **The identity m
 | `types.rs` | Core identity primitives | `TenantId`, `PolicyHash`, `TenantSecretKey` |
 | `canonical.rs` | Deterministic encoding | `CanonicalBytes` trait, primitive impls |
 | `hashing.rs` | Domain-separated derivation | `domain_hasher`, `finalize_32`, `finalize_64`, cached hashers |
-| `domain.rs` | Domain constant registry | 17 domain strings, uniqueness enforcement |
+| `domain.rs` | Domain constant registry | 18 domain strings, uniqueness enforcement |
 | `item.rs` | Scan-object identity | `ConnectorTag`, `ConnectorInstanceIdHash`, `ItemIdentityKey`, `StableItemId`, `ObjectVersionId` |
 | `finding.rs` | Secret/finding identity | `NormHash`, `SecretHash`, `FindingId`, `OccurrenceId`, `ObservationId` |
 | `policy.rs` | Policy-hash derivation | `PolicyHashInputs`, `compute_policy_hash`, `IdHashMode` |
@@ -52,7 +52,7 @@ The identity module enforces a strict acyclic dependency graph internally:
 graph TD
     types["types.rs<br/>(TenantId, PolicyHash, TenantSecretKey)"]
     canonical["canonical.rs<br/>(CanonicalBytes trait)"]
-    domain["domain.rs<br/>(17 domain constants)"]
+    domain["domain.rs<br/>(18 domain constants)"]
     hashing["hashing.rs<br/>(domain_hasher, cached hashers)"]
     item["item.rs<br/>(ConnectorTag, ConnectorInstanceIdHash,<br/>ItemIdentityKey, StableItemId)"]
     policy["policy.rs<br/>(PolicyHashInputs, compute_policy_hash)"]

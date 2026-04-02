@@ -1,6 +1,6 @@
 # Domain Separation Registry
 
-## All 17 Domain Constants
+## All 18 Domain Constants
 
 **Source:** `crates/gossip-contracts/src/identity/domain.rs`
 
@@ -23,6 +23,7 @@
 | `TRIAGE_GROUP_KEY_V1` | `"gossip/persistence/v1/triage-group"` | Persistence | derive-key | TriageGroupKey derivation |
 | `COORDINATION_TELEMETRY_V1` | `"gossip/worker/v1/coordination-telemetry"` | Worker | derive-key | Coordination telemetry redaction digest |
 | `GIT_REPO_ID_V1` | `"gossip/git/v1/repo-id"` | Git | derive-key | Stable 64-bit repository-namespace derivation for repo-native Git scans |
+| `GIT_MIRROR_PATH_V1` | `"gossip/git/v1/mirror-path"` | Git | derive-key | Stable mirror-cache path derivation for repo-native Git scans |
 
 ## Naming Convention
 
@@ -72,11 +73,11 @@ Domain constants must be globally unique. A collision would break domain separat
 
 ### Layer 1: Compile-Time Array Length
 
-**Mechanism:** The `ALL` array has a fixed length (17). Adding a constant without updating the array length is a compile error.
+**Mechanism:** The `ALL` array has a fixed length (18). Adding a constant without updating the array length is a compile error.
 
 **Source** (`domain.rs:149-166`):
 ```rust
-pub const ALL: [&str; 17] = [
+pub const ALL: [&str; 18] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
     FINDING_ID_V1,
@@ -94,6 +95,7 @@ pub const ALL: [&str; 17] = [
     TRIAGE_GROUP_KEY_V1,
     COORDINATION_TELEMETRY_V1,
     GIT_REPO_ID_V1,
+    GIT_MIRROR_PATH_V1,
 ];
 ```
 
@@ -102,8 +104,8 @@ pub const ALL: [&str; 17] = [
 error[E0308]: mismatched types
   --> crates/gossip-contracts/src/identity/domain.rs:149:26
    |
-149 | pub const ALL: [&str; 17] = [
-   |                          ^^ expected an array with a fixed size of 17 elements, found one with 18 elements
+149 | pub const ALL: [&str; 18] = [
+   |                          ^^ expected an array with a fixed size of 18 elements, found one with 19 elements
 ```
 
 ### Layer 2: `no_duplicate_values` Test
@@ -269,7 +271,7 @@ proptest! {
 
 | Layer | Mechanism | Catches | Fires At |
 |-------|-----------|---------|----------|
-| 1. Compile-time length | `ALL: [&str; 17]` | Added constant, forgot to update array | `cargo check` |
+| 1. Compile-time length | `ALL: [&str; 18]` | Added constant, forgot to update array | `cargo check` |
 | 2. Value uniqueness | `HashSet::insert(value)` | Two constants with same string value | `cargo test` |
 | 3. Name uniqueness | `HashSet::insert(name)` | Copy-paste error (same name reused) | `cargo test` |
 | 4. Fixture completeness | Cross-check fixture vs `ALL` | Constant in fixture but not in `ALL` | `cargo test` |

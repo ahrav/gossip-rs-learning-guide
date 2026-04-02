@@ -143,7 +143,10 @@ for page-based enumeration alongside `open`, `read_range`, and
 `connector::git` because whole-repository execution does not fit the
 ordered-content model. `GitConnector` and `InMemoryDeterministicConnector`
 provide the four shared methods as inherent methods only -- they do not
-implement the trait.
+implement the trait. The Git contracts define three specialized traits
+(`GitRepoDiscoverySource`, `GitMirrorManager`, `GitRepoExecutor`) that model
+the repo-frontier lifecycle rather than item-by-item enumeration -- see
+Chapter 6 for details.
 
 The three concrete connectors are:
 

@@ -358,19 +358,19 @@ Some invariants can be enforced at compile time using Rust's type system and con
 ### Example: Domain Constant Count
 
 ```rust
-pub const ALL: [&str; 17] = [
+pub const ALL: [&str; 18] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
-    // ... (17 total)
+    // ... (18 total)
 ];
 ```
 
-If you add an 18th domain constant but forget to add it to the array, **compilation fails**:
+If you add a 19th domain constant but forget to add it to the array, **compilation fails**:
 
 ```
 error: mismatched types
-  expected array `[&str; 17]`
-  found array `[&str; 18]`
+  expected array `[&str; 18]`
+  found array `[&str; 19]`
 ```
 
 No runtime check needed - the compiler enforces the invariant.

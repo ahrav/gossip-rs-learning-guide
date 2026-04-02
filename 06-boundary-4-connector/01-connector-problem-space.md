@@ -171,7 +171,11 @@ The modules compose in a layered dependency order:
   +-------------------------------------------------+
   | Reusable ordered-content conformance harness:     |
   | run_ordered_content_conformance,                  |
-  | drain_ordered_source                              |
+  | drain_ordered_source,                             |
+  | drain_ordered_source_from,                        |
+  | assert_repeatable_drain,                          |
+  | assert_resume_after_corrupt_token,                |
+  | assert_no_forbidden_fragments                     |
   +-------------------------------------------------+
 ```
 
@@ -203,7 +207,9 @@ family models sources whose worker loop fills bounded ordered pages of
 family models whole-repository execution rather than item-by-item enumeration.
 
 **Layer 4c (conformance)** provides a reusable ordered-content conformance
-harness (`run_ordered_content_conformance`, `drain_ordered_source`) that
+harness (`run_ordered_content_conformance`, `drain_ordered_source`,
+`drain_ordered_source_from`, `assert_repeatable_drain`,
+`assert_resume_after_corrupt_token`, `assert_no_forbidden_fragments`) that
 validates connector implementations against the `OrderedContentSource` contract.
 
 Family modules compose from the shared layers instead of inheriting a single

@@ -323,6 +323,8 @@ pub struct GitScanConfig {
     pub scan_mode: GitScanMode,
     /// Merge-diff strategy for merge commits.
     pub merge_mode: MergeDiffMode,
+    /// Ref-selection policy that determines which refs form the scan start set.
+    pub ref_selection: GitRefSelection,
     /// Optional tree delta cache size override in MiB.
     pub tree_delta_cache_mb: Option<u32>,
     /// Optional engine chunk size override in MiB.
@@ -334,7 +336,7 @@ pub struct GitScanConfig {
 }
 ```
 
-Like `FsScanConfig`, `GitScanConfig` exposes `scan_binary`, `anchor_mode`, `rules_file`, `transform_filter`, and `decode_depth` -- the same engine-level knobs that control content policy and transform depth. On top of those shared knobs, `GitScanConfig` adds git-specific fields: `debug_level` controls git diagnostic output, `enrich_identities` enables identity dictionary enrichment on commit metadata, `repo_id` provides a stable key for persistence, `scan_mode` selects between diff-history and ODB-blob fast-path traversal, `merge_mode` chooses the merge-diff strategy, and `tree_delta_cache_mb` / `engine_chunk_mb` tune memory usage for the git walker. The only filesystem-specific field absent from the git config is `skip_archives` (git blobs are not archive-expanded) and `persist_findings` (controlled at the distributed runtime level instead).
+Like `FsScanConfig`, `GitScanConfig` exposes `scan_binary`, `anchor_mode`, `rules_file`, `transform_filter`, and `decode_depth` -- the same engine-level knobs that control content policy and transform depth. On top of those shared knobs, `GitScanConfig` adds git-specific fields: `debug_level` controls git diagnostic output, `enrich_identities` enables identity dictionary enrichment on commit metadata, `repo_id` provides a stable key for persistence, `scan_mode` selects between diff-history and ODB-blob fast-path traversal, `merge_mode` chooses the merge-diff strategy, `ref_selection` determines which refs form the scan start set (the default branch, all branches, or an explicit ref list), and `tree_delta_cache_mb` / `engine_chunk_mb` tune memory usage for the git walker. The only filesystem-specific field absent from the git config is `skip_archives` (git blobs are not archive-expanded) and `persist_findings` (controlled at the distributed runtime level instead).
 
 ## 6. Path Validation
 

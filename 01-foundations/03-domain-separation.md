@@ -86,7 +86,7 @@ graph TD
 
 ## The Registry Pattern in Gossip-rs
 
-Gossip-rs maintains a **domain registry** in `crates/gossip-contracts/src/identity/domain.rs` with 17 domain constants.
+Gossip-rs maintains a **domain registry** in `crates/gossip-contracts/src/identity/domain.rs` with 18 domain constants.
 
 ### Domain Naming Convention
 
@@ -129,6 +129,7 @@ gossip/<subsystem>/v<N>[/<operation>]
 | `TRIAGE_GROUP_KEY_V1` | `gossip/persistence/v1/triage-group` | Derive-key | Triage group key |
 | `COORDINATION_TELEMETRY_V1` | `gossip/worker/v1/coordination-telemetry` | Derive-key | Coordination telemetry redaction digest |
 | `GIT_REPO_ID_V1` | `gossip/git/v1/repo-id` | Derive-key | Stable 64-bit repository-namespace derivation for repo-native Git scans |
+| `GIT_MIRROR_PATH_V1` | `gossip/git/v1/mirror-path` | Derive-key | Stable mirror-cache path derivation for repo-native Git scans |
 
 ### The SECRET_HASH_V1 Exception
 
@@ -160,20 +161,20 @@ Gossip-rs enforces domain uniqueness at **compile time** and **test time** with 
 ### Layer 1: Compile-Time Array Length
 
 ```rust
-pub const ALL: [&str; 17] = [
+pub const ALL: [&str; 18] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
     FINDING_ID_V1,
-    // ... (17 total)
+    // ... (18 total)
 ];
 ```
 
-**Property**: If you add an 18th domain but forget to update the array length, compilation fails:
+**Property**: If you add a 19th domain but forget to update the array length, compilation fails:
 
 ```
 error: mismatched types
-  expected array `[&str; 17]`
-  found array `[&str; 18]`
+  expected array `[&str; 18]`
+  found array `[&str; 19]`
 ```
 
 ### Layer 2: no_duplicate_values Test
@@ -344,14 +345,14 @@ pub const FINDING_ID_V1: &str = "gossip/finding/v1";
 /// Domain constant for stable item ID
 pub const ITEM_ID_V1: &str = "gossip/item-id/v1";
 
-// ... (15 more constants)
+// ... (16 more constants)
 
 /// All domain constants for verification
-pub const ALL: [&str; 17] = [
+pub const ALL: [&str; 18] = [
     SPLIT_ID_V1,
     OP_PAYLOAD_V1,
     FINDING_ID_V1,
-    // ... (17 total)
+    // ... (18 total)
 ];
 ```
 

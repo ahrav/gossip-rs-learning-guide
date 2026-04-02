@@ -289,19 +289,20 @@ The most complex operation in the backend. It takes an unowned shard and returns
 
 The operation spans approximately 180 lines because it must handle four concerns atomically: creating an etcd lease, writing the owner key with that lease, updating the shard record with a new fence epoch and lease deadline, and cleaning up the etcd lease on failure.
 
-The CAS loop:
+The CAS loop (shown here with the `cas_retry` closure's `this` reference to the coordinator):
 
-From `backend.rs`:
+From `shard_coordination.rs`:
 
 ```rust
-for attempt in 0..self.config.optimistic_txn_retries() {
-    let persisted = match self.load_shard_record(tenant, key) {
+for attempt in 0..this.config.optimistic_txn_retries() {
+    let persisted = match this.load_shard_record(tenant, key) {
         Ok(Some(shard)) => shard,
         Ok(None) => return Err(AcquireError::ShardNotFound { shard: key }),
         Err(err) => {
-            return Err(AcquireError::BackendError {
-                message: format!("acquire.load_shard: {err}"),
-            });
+            return Err(AcquireError::BackendError(super::map_etcd_err(
+                "acquire.load_shard",
+                err,
+            )));
         }
     };
 
@@ -333,12 +334,13 @@ The precondition checks are deterministic. If the shard does not exist, is termi
 After preconditions pass, the operation creates a fresh etcd lease and builds the mutation:
 
 ```rust
-    let grant = match self.etcd_lease_grant(self.config.owner_lease_ttl_secs()) {
+    let grant = match this.etcd_lease_grant(this.config.owner_lease_ttl_secs()) {
         Ok(g) => g,
         Err(err) => {
-            return Err(AcquireError::BackendError {
-                message: format!("acquire.lease_grant: {err}"),
-            });
+            return Err(AcquireError::BackendError(super::map_etcd_err(
+                "acquire.lease_grant",
+                err,
+            )));
         }
     };
     let new_lease_id = grant.id();
@@ -348,43 +350,47 @@ After preconditions pass, the operation creates a fresh etcd lease and builds th
     let new_fence = persisted.record.advance_fence();
     persisted.record.lease = Some(LeaseHolder::new(worker, new_deadline));
     persisted.record.assert_invariants(&persisted.slab);
-    let shard_blob = encode_shard_record(&persisted.record, &persisted.slab)
-        .unwrap_or_else(|err| self.fatal_storage_error("acquire.encode_shard", err));
-    let owner_blob = encode_owner_value(worker, new_fence);
+    encode_shard_record_into(&persisted.record, &persisted.slab, &mut shard_buf)
+        .map_err(|err| {
+            this.best_effort_revoke_lease(new_lease_id);
+            AcquireError::BackendError(InfraError::corruption(
+                "acquire.encode_shard",
+                err,
+            ))
+        })?;
+    encode_owner_value_into(worker, new_fence, &mut owner_buf);
 ```
 
-The fence epoch is advanced *before* encoding. `advance_fence` increments the epoch atomically on the in-memory record. The shard record is then encoded with the new lease holder and fence epoch. The owner blob is encoded with the new worker and fence.
+The fence epoch is advanced *before* encoding. `advance_fence` increments the epoch atomically on the in-memory record. The shard record is then encoded into a reusable buffer (`shard_buf`) with the new lease holder and fence epoch. The owner blob is encoded into its own reusable buffer (`owner_buf`) with the new worker and fence. Both buffers are pre-allocated outside the CAS loop and cleared on each retry to avoid per-attempt allocation. If encoding fails, the freshly granted lease is immediately revoked before propagating the error.
 
-The transaction uses two operations: a put on the shard record key (without a lease — the record is permanent) and a put on the owner key (with the new lease ID):
+The `TxnBuilder` accumulates compare clauses and operations, then submits the atomic etcd transaction. Two put operations: a put on the shard record key (without a lease — the record is permanent) and a put on the owner key (with the new lease ID via `put_with_options`):
 
 ```rust
-    let txn = Txn::new().when(compares).and_then(vec![
-        TxnOp::put(shard_record_key.into_bytes(), shard_blob, None),
-        TxnOp::put(
+    let mut txn = TxnBuilder::from_compares(compares);
+    txn.put(shard_record_key.into_bytes(), shard_buf.clone())
+        .put_with_options(
             owner_key.into_bytes(),
-            owner_blob,
-            Some(PutOptions::new().with_lease(new_lease_id)),
-        ),
-    ]);
+            owner_buf.clone(),
+            PutOptions::new().with_lease(new_lease_id),
+        );
 ```
 
 The `compares` vector contains either four clauses (shard revision + three-clause owner guard, if a prior owner exists) or two clauses (shard revision + owner absent, if the shard was unowned). This branching handles the transition from "no owner" to "has owner" as well as "expired owner" to "new owner."
 
-On CAS failure, the freshly granted etcd lease is immediately revoked to prevent lease accumulation:
+On CAS failure, the freshly granted etcd lease is immediately revoked to prevent lease accumulation. The `cas_retry` helper handles backoff and loop control:
 
 ```rust
-    if !response.succeeded() {
-        self.best_effort_revoke_lease(new_lease_id);
-        std::thread::sleep(cas_retry_delay(attempt));
-        continue;
+    if matches!(outcome, CasOutcome::RetryNeeded) {
+        this.best_effort_revoke_lease(new_lease_id);
+        return Ok(CasOutcome::RetryNeeded);
     }
 ```
 
-On success, the prior lease (if any) is revoked as cleanup, the capacity hint is computed via a lightweight count-only RPC, and the `AcquireResultView` is assembled from the mutated in-memory record:
+On success, the prior lease (if any) is revoked as cleanup, the capacity hint is computed via a lightweight count-only RPC, and the `AcquireResultView` is assembled from the mutated in-memory record via the `build_acquire_result` helper:
 
 ```rust
     if let Some(old_lease_id) = prior_lease_id {
-        self.best_effort_revoke_lease(old_lease_id);
+        this.best_effort_revoke_lease(old_lease_id);
     }
 
     let lease = Lease::new(
@@ -414,7 +420,7 @@ The `AcquireScratch` buffer (`out`) is caller-owned and reusable across acquire 
 
 Renew extends the logical lease deadline in the shard record and refreshes the etcd lease TTL. It does not modify cursor state, fence epoch, or any other shard field.
 
-From `backend.rs`:
+From `shard_coordination.rs`:
 
 ```rust
 fn renew(
@@ -426,57 +432,50 @@ fn renew(
     let key = lease.shard_key();
 
     for attempt in 0..self.config.optimistic_txn_retries() {
-        let persisted = match self.load_shard_record(tenant, key) {
-            Ok(Some(shard)) => shard,
-            Ok(None) => return Err(RenewError::ShardNotFound { shard: key }),
-            Err(err) => {
-                return Err(RenewError::BackendError {
-                    message: format!("renew.load_shard: {err}"),
-                });
-            }
-        };
-
-        validate_lease(now, tenant, lease, &persisted.record)?;
-        if !persisted.owner_matches_lease(lease) {
-            return Err(RenewError::StaleFence {
-                presented: lease.fence(),
-                current: persisted.record.fence_epoch,
-            });
-        }
+        let persisted = this.load_shard_and_validate_lease(
+            now,
+            tenant,
+            lease,
+            |shard| RenewError::ShardNotFound { shard },
+            |err| RenewError::BackendError(super::map_etcd_err("renew.load_shard", err)),
+            |presented, current| RenewError::StaleFence { presented, current },
+        )?;
 ```
 
-The precondition validation uses the shared `validate_lease` function (defined in `gossip-coordination`) followed by an owner-binding match. If the owner key has been deleted (lease expired) or the fence epoch has advanced (another worker acquired), the renew fails immediately.
+The precondition validation uses `load_shard_and_validate_lease`, a helper that combines shard loading, lease validation, and owner-binding matching into a single call. If the shard does not exist, the owner key has been deleted (lease expired), or the fence epoch has advanced (another worker acquired), the renew fails immediately with the appropriate error — each error constructor is passed as a closure to avoid coupling the helper to a specific error type.
 
 The transaction updates only the shard record with a new lease deadline. The owner key value does not change — only the etcd lease TTL is refreshed:
 
 ```rust
-        let txn = Txn::new().when(compares).and_then(vec![TxnOp::put(
-            shard_record_key.into_bytes(),
-            shard_blob,
-            None,
-        )]);
+        let mut txn = TxnBuilder::from_compares(compares);
+        txn.put(shard_record_key.into_bytes(), shard_buf.clone());
 ```
 
 The compares include the shard `mod_revision` and the three-clause owner guard. After CAS success, a best-effort `keep_alive_once` call extends the etcd lease:
 
 ```rust
-        if response.succeeded() {
-            let _ = self.etcd_lease_keep_alive_once(old_lease_id);
-            // ...
-            return Ok(RenewResult {
-                new_deadline,
-                capacity,
-            });
+        if let Err(err) = this.etcd_lease_keep_alive_once(old_lease_id) {
+            tracing::warn!(
+                lease_id = old_lease_id,
+                %err,
+                "renew: failed to extend etcd lease TTL; \
+                 logical deadline was committed but etcd lease may expire early",
+            );
         }
+        // ...
+        Ok(CasOutcome::Committed(RenewResult {
+            new_deadline,
+            capacity,
+        }))
 ```
 
-The keep-alive is deliberately best-effort. If it fails (transport blip, lease expired in the tiny window between CAS and the keep-alive call), the CAS already committed the new deadline to the shard record. Returning an error would lie about the outcome — the shard record IS updated. The next renew cycle will detect ownership loss via `owner_matches_lease` if the owner key was deleted.
+The keep-alive is deliberately best-effort. If it fails (transport blip, lease expired in the tiny window between CAS and the keep-alive call), the CAS already committed the new deadline to the shard record. The warning is logged for operational visibility, but no error is returned — returning an error would lie about the outcome, since the shard record IS updated. The next renew cycle will detect ownership loss via `owner_matches_lease` if the owner key was deleted.
 
 ## checkpoint
 
 Checkpoint updates the cursor in the shard record while preserving all fencing invariants. It is the most frequently called operation during normal scanning — every batch of records processed triggers a checkpoint to persist cursor progress.
 
-From `backend.rs`:
+From `shard_coordination.rs`:
 
 ```rust
 fn checkpoint(
@@ -490,30 +489,30 @@ fn checkpoint(
     let key = lease.shard_key();
     let payload_hash = hash_checkpoint_payload(new_cursor);
 
-    for attempt in 0..self.config.optimistic_txn_retries() {
-        let persisted = match self.load_shard_record(tenant, key) {
-            // ...
-        };
+    // Inside the cas_retry closure:
+    let persisted = match this.load_shard_record(tenant, key) {
+        // ...
+    };
 
-        if check_op_idempotency(&persisted.record, op_id, payload_hash)?.is_some() {
-            return Ok(IdempotentOutcome::Replayed(()));
-        }
-        validate_lease(now, tenant, lease, &persisted.record)?;
-        if !persisted.owner_matches_lease(lease) {
-            return Err(CheckpointError::StaleFence {
-                presented: lease.fence(),
-                current: persisted.record.fence_epoch,
-            });
-        }
-        validate_cursor_update_pooled(
-            new_cursor,
-            persisted.record.cursor.last_key(&persisted.slab),
-            persisted.record.spec.key_range_start(&persisted.slab),
-            persisted.record.spec.key_range_end(&persisted.slab),
-        )?;
+    if check_op_idempotency(&persisted.record, op_id, payload_hash)?.is_some() {
+        return Ok(CasOutcome::Committed(IdempotentOutcome::Replayed(())));
+    }
+    validate_loaded_shard_lease(
+        now,
+        tenant,
+        lease,
+        &persisted,
+        |presented, current| CheckpointError::StaleFence { presented, current },
+    )?;
+    validate_cursor_update_pooled(
+        new_cursor,
+        persisted.record.cursor.last_key(&persisted.slab),
+        persisted.record.spec.key_range_start(&persisted.slab),
+        persisted.record.spec.key_range_end(&persisted.slab),
+    )?;
 ```
 
-Checkpoint adds two checks that renew does not need. First, `check_op_idempotency` scans the shard's op log for a matching `(op_id, payload_hash)` pair. If found, the checkpoint was already applied — the operation returns `Replayed` without modifying anything. This is the idempotency mechanism described in chapter 5. Second, `validate_cursor_update_pooled` verifies that the new cursor is within the shard's key range bounds — a structural invariant that prevents cursor corruption.
+Checkpoint adds two checks that renew does not need. First, `check_op_idempotency` scans the shard's op log for a matching `(op_id, payload_hash)` pair. If found, the checkpoint was already applied — the operation returns `Replayed` without modifying anything. This is the idempotency mechanism described in chapter 5. `validate_loaded_shard_lease` then checks lease validity and owner-binding match in a single call — the same combined validation used by renew. Finally, `validate_cursor_update_pooled` verifies that the new cursor is within the shard's key range bounds — a structural invariant that prevents cursor corruption.
 
 After validation, the cursor is updated in-place on the in-memory record, an op log entry is pushed, and the CAS transaction is built:
 
@@ -541,7 +540,7 @@ The transaction guards are identical to renew: shard `mod_revision` plus the thr
 
 Run creation uses the simplest CAS pattern: a single `compare_absent` guard ensuring the run key does not already exist.
 
-From `backend.rs`:
+From `run_management.rs`:
 
 ```rust
 fn create_run(
@@ -567,9 +566,9 @@ fn create_run(
 
     let key = self.keyspace.run_record_key(tenant, run);
     let blob = encode_run_record(&record);
-    let txn = Txn::new()
-        .when(vec![Self::compare_absent(key.clone())])
-        .and_then(vec![TxnOp::put(key.into_bytes(), blob, None)]);
+    let mut txn = TxnBuilder::new();
+    txn.compare(super::compare_absent(key.clone()))
+        .put(key.into_bytes(), blob);
 ```
 
 If the key already exists, the transaction fails and the operation returns `RunAlreadyExists`. There is no retry loop — duplicate run creation is a caller error, not a contention scenario.
@@ -580,34 +579,35 @@ Shard registration is the most complex run-management operation. It must atomica
 
 The operation enforces a hard limit derived from etcd's default `--max-txn-ops` cap of 128:
 
-From `backend.rs`:
+From `run_management.rs`:
 
 ```rust
 const MAX_SHARDS_PER_ETCD_TXN: usize = 41;
 ```
 
-Each shard generates 3 ops (compare-absent, put-record, put-active-index) plus 3 fixed ops for the run record (compare-run-revision, put-run-record, put-run-active-index), giving `(128 - 3) / 3 = 41` as the maximum shard count per transaction. Exceeding this limit returns `ResourceExhausted { resource: "etcd_txn_ops" }` immediately.
+Each shard generates 3 ops (compare-absent, put-record, put-active-index) plus a fixed overhead of 5 ops for the run record (compare-run-revision, put-run-record, put-run-active-index) and tenant counter (compare + put), giving `(128 - 5) / 3 = 41` as the maximum shard count per transaction. Exceeding this limit returns `ResourceExhausted { resource: "etcd_txn_ops" }` immediately.
 
 The compares vector ensures atomicity: one `compare_run_revision` guard on the run record, plus one `compare_absent` per shard key:
 
 ```rust
-    let mut compares = Vec::with_capacity(1 + shards.len());
-    let run_key = self.keyspace.run_record_key(tenant, run);
-    compares.push(Self::compare_run_revision(
+    let mut compares = Vec::with_capacity(2 + shards.len());
+    let run_key = this.keyspace.run_record_key(tenant, run);
+    compares.push(super::compare_run_revision(
         run_key.clone(),
         persisted_run.mod_revision,
     ));
+    compares.push(tenant_counter.compare);
 
     for shard in shards {
-        let shard_key = self.keyspace.shard_record_key(tenant, run, shard.shard());
-        compares.push(Self::compare_absent(shard_key.clone()));
+        let shard_key = this.keyspace.shard_record_key(tenant, run, shard.shard());
+        compares.push(super::compare_absent(shard_key.clone()));
         let shard_blob =
-            self.build_root_shard_blob(tenant, run, cursor_semantics, shard)?;
+            super::build_root_shard_blob(tenant, run, cursor_semantics, shard)?;
         txn_ops.push(TxnOp::put(shard_key.into_bytes(), shard_blob, None));
 
-        let active_index = self
-            .keyspace
-            .shard_active_index_key(tenant, run, shard.shard());
+        let active_index =
+            this.keyspace
+                .shard_active_index_key(tenant, run, shard.shard());
         txn_ops.push(TxnOp::put(
             active_index.into_bytes(),
             Vec::<u8>::new(),
@@ -688,42 +688,68 @@ fn build_slab_capacity_for_initial_shard(input: &InitialShardInput<'_>) -> usize
 
 The 256-byte padding covers slab header overhead and alignment. The floor (`DEFAULT_BUILD_SLAB_FLOOR = 1024`) ensures tiny shards still get a workable slab.
 
-## Unimplemented Operations
+## Lifecycle and Terminal Operations
 
-The etcd backend does not yet persist all coordination operations. Eight operations panic with a descriptive message when called, signaling that the code path must not be reached until persistence logic is added:
+All coordination backend operations are fully implemented with optimistic CAS transactions. The shard lifecycle operations (`complete`, `park_shard`, `split_replace`, `split_residual`) and run transition operations (`complete_run`, `fail_run`, `cancel_run`, `unpark_shard`) follow the same CAS retry discipline as the hot-path operations but use richer transaction structures.
 
-```rust
-fn fail_unimplemented<T>(&self, operation: &'static str) -> T {
-    panic!(
-        "EtcdCoordinator::{operation} is not yet persisted to etcd; \
-         this operation must be implemented before it is callable"
-    );
-}
-```
+`complete` and `park_shard` share a common terminal-transition helper (`execute_sync_terminal_transition`) that encapsulates the load-validate-mutate-CAS-retry loop. Both atomically update the shard record, delete the owner key and active-index entry, and revoke the etcd lease best-effort. The caller supplies an `apply` closure for the operation-specific record mutations — `complete` applies a final cursor update and sets status to `Done`, while `park_shard` sets status to `Parked` with a reason. Both are idempotent via op-log replay.
 
-The affected operations are `complete`, `park_shard`, `split_replace`, `split_residual`, `complete_run`, `fail_run`, `cancel_run`, and `unpark_shard`. These are the terminal and lifecycle transition operations — they change shard or run status in ways that require additional CAS patterns beyond what the hot path uses. `complete` must atomically update the shard status and remove the active-index entry. `split_replace` and `split_residual` must create child shard records in the same transaction that marks the parent as split. The run transition operations (`complete_run`, `fail_run`, `cancel_run`) must verify that all shards have reached a terminal state before transitioning the run. The acquire/renew/checkpoint hot path and the run creation/registration path are fully persisted; the terminal operations will follow as the coordination surface is extended.
+`split_replace` atomically replaces an owned shard with N child shards in a single transaction. The parent transitions to `Split` status (terminal), its owner key and active-index entry are deleted, and each child is created as an unowned `Active` shard. Child IDs are deterministically derived via BLAKE3 from the parent identity, op ID, and spawned index. The CAS guards include absence checks on every child key, preventing double-creation.
+
+`split_residual` shrinks an owned shard's key range and spawns a single residual shard for the removed range. Unlike `split_replace`, the parent stays `Active` and retains its owner binding.
+
+The run transition operations (`complete_run`, `fail_run`, `cancel_run`) share a `transition_run_terminal` helper that validates the run's current status and deletes the active-run index entry in the same CAS transaction. `unpark_shard` transitions a `Parked` shard back to `Active` and publishes a new active-shard index entry, guarding both the shard and the run record to prevent unparking into a terminated run.
 
 ## BackendError Propagation
 
-Every domain error type in the coordination crate (`AcquireError`, `RenewError`, `CheckpointError`, `CreateRunError`, `RegisterShardsError`, `GetRunError`, `ClaimError`) carries a `BackendError { message: String }` variant. The etcd backend uses this variant to surface infrastructure failures without exposing `EtcdCoordinatorError` through the trait boundary.
-
-The pattern is consistent across all operations:
+Every domain error type in the coordination crate (`AcquireError`, `RenewError`, `CheckpointError`, `CreateRunError`, `RegisterShardsError`, `GetRunError`, `ClaimError`, `CompleteError`, `ParkError`, `SplitReplaceError`, `SplitResidualError`, `RunTransitionError`, `UnparkError`) carries a `BackendError(#[source] InfraError)` variant. `InfraError` is a structured enum with two variants:
 
 ```rust
-Err(err) => {
-    return Err(AcquireError::BackendError {
-        message: format!("acquire.load_shard: {err}"),
-    });
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum InfraError {
+    /// Transient infrastructure failure — the operation may succeed on retry.
+    #[error("[transient] {operation}: {message}")]
+    Transient {
+        operation: String,
+        message: String,
+    },
+
+    /// Permanent data corruption — retrying will not help.
+    #[error("[corruption] {operation}: {message}")]
+    Corruption {
+        operation: String,
+        message: String,
+    },
 }
 ```
 
-The message prefix (`acquire.load_shard`, `renew.txn`, `checkpoint.encode_shard`) identifies which operation and which internal step failed. The `EtcdCoordinatorError`'s `Display` implementation includes the etcd operation tag and the underlying gRPC error, so the formatted message carries enough context for diagnosis without requiring callers to depend on the etcd-specific error type.
+The `operation` field identifies the failing step (e.g., `"acquire.load_shard"`, `"renew.txn"`, `"checkpoint.encode_shard"`). The two variants let callers programmatically distinguish transient I/O failures from permanent data corruption without parsing strings: `InfraError::is_transient()` means retry after backoff, `InfraError::is_corruption()` means operator investigation is required.
 
-This design preserves the trait's backend-agnostic contract: the in-memory coordinator never produces `BackendError` (it has no infrastructure to fail), while the etcd coordinator translates every infrastructure failure into the same variant. Callers can treat `BackendError` as a transient failure eligible for retry after backoff, regardless of which backend is in use.
+The etcd backend translates `EtcdCoordinatorError` into `InfraError` through `map_etcd_err`, which classifies by error kind:
+
+```rust
+Err(err) => {
+    return Err(AcquireError::BackendError(super::map_etcd_err(
+        "acquire.load_shard",
+        err,
+    )));
+}
+```
+
+The mapping routes gRPC transport failures (`EtcdCoordinatorError::Etcd`) to `InfraError::transient` and codec/config/keyspace failures to `InfraError::corruption`. For internal error paths where the failure type is already known, the backend constructs `InfraError` directly:
+
+```rust
+Err(AcquireError::BackendError(InfraError::transient(
+    "acquire",
+    "CAS retry budget exhausted",
+)))
+```
+
+This design preserves the trait's backend-agnostic contract: the in-memory coordinator never produces `BackendError` (it has no infrastructure to fail), while the etcd coordinator translates every infrastructure failure into a typed `InfraError`. Callers can inspect the variant to decide whether to retry (`Transient`) or alert an operator (`Corruption`), regardless of which backend is in use.
 
 ## Summary
 
-The etcd backend implements coordination operations through a disciplined pattern: load, validate, mutate, CAS-submit, retry. Three internal types (`PersistedRun`, `PersistedShard`, `PersistedOwner`) pair domain records with their etcd metadata. The three-clause owner guard (`compare_owner_present`) checks existence, value equality, and lease identity in a single transaction — closing the zombie worker gap that simpler guards leave open. The CAS retry loop uses exponential backoff with jitter to prevent thundering-herd contention. The `acquire_and_restore_into` operation creates etcd leases, writes owner keys with TTL, and assembles full shard snapshots in a single transactional flow. The `renew` and `checkpoint` operations use the same three-clause guard to ensure that only the current lease holder can extend or advance shard state. Run management operations (`create_run`, `register_shards`) use simpler CAS patterns appropriate to their contention profile. Eight terminal operations remain unimplemented as panicking stubs.
+The etcd backend implements coordination operations through a disciplined pattern: load, validate, mutate, CAS-submit, retry. Three internal types (`PersistedRun`, `PersistedShard`, `PersistedOwner`) pair domain records with their etcd metadata. The three-clause owner guard (`compare_owner_present`) checks existence, value equality, and lease identity in a single transaction — closing the zombie worker gap that simpler guards leave open. The CAS retry loop uses exponential backoff with jitter to prevent thundering-herd contention. The `acquire_and_restore_into` operation creates etcd leases, writes owner keys with TTL, and assembles full shard snapshots in a single transactional flow. The `renew` and `checkpoint` operations use the same three-clause guard to ensure that only the current lease holder can extend or advance shard state. Run management operations (`create_run`, `register_shards`) use simpler CAS patterns appropriate to their contention profile. Lifecycle operations (`complete`, `park_shard`, `split_replace`, `split_residual`) and run transitions (`complete_run`, `fail_run`, `cancel_run`, `unpark_shard`) use richer transaction structures — shared terminal-transition helpers, multi-key atomic creates for split children, and run-status guards — all following the same CAS discipline. Infrastructure errors propagate through a structured `BackendError(InfraError)` variant that distinguishes transient failures from permanent corruption.
 
 ## What's Next
 

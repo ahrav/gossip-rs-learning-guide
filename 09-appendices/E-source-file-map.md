@@ -325,7 +325,7 @@ Shared Postgres infrastructure (connection pooling, migration runner, test suppo
 
 ### scanner-git
 
-`crates/scanner-git/src/` (106 files)
+`crates/scanner-git/src/` (109 files)
 
 A large crate implementing the complete Git scanning pipeline. Key files:
 
@@ -372,7 +372,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-scanner-runtime
 
-`crates/gossip-scanner-runtime/src/` (18 files)
+`crates/gossip-scanner-runtime/src/` (19 files)
 
 | Source File | Topics |
 |------------|---------|
@@ -387,6 +387,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 | `crates/gossip-scanner-runtime/src/coordination_sink.rs` | Coordination-aware result sink |
 | `crates/gossip-scanner-runtime/src/distributed.rs` | Distributed execution mode, ReceiptCommitSink |
 | `crates/gossip-scanner-runtime/src/event_sink.rs` | Event sink for observability |
+| `crates/gossip-scanner-runtime/src/git_mirror.rs` | Git mirror/clone management for local repository caching |
 | `crates/gossip-scanner-runtime/src/git_repo.rs` | Git repository scanning dispatch |
 | `crates/gossip-scanner-runtime/src/ordered_content.rs` | Filesystem/ordered-content scanning dispatch |
 | `crates/gossip-scanner-runtime/src/parity.rs` | Parity checking between execution modes |
@@ -409,7 +410,7 @@ A large crate implementing the complete Git scanning pipeline. Key files:
 
 ### gossip-orchestrator
 
-`crates/gossip-orchestrator/src/` (8 files)
+`crates/gossip-orchestrator/src/` (10 files)
 
 High-level orchestration for multi-source scan coordination. Plans scan jobs, constructs runtime payloads, and drives setup for distributed scan execution.
 
@@ -418,6 +419,8 @@ High-level orchestration for multi-source scan coordination. Plans scan jobs, co
 | `crates/gossip-orchestrator/src/lib.rs` | Crate root, module declarations |
 | `crates/gossip-orchestrator/src/payload.rs` | Scan payload types for runtime dispatch |
 | `crates/gossip-orchestrator/src/git_payload.rs` | Git-specific scan payload types |
+| `crates/gossip-orchestrator/src/git_planner.rs` | Git-specific scan job planning |
+| `crates/gossip-orchestrator/src/git_setup.rs` | Git-specific runtime setup |
 | `crates/gossip-orchestrator/src/planner.rs` | Scan job planning and scheduling |
 | `crates/gossip-orchestrator/src/request.rs` | Scan request types |
 | `crates/gossip-orchestrator/src/git_request.rs` | Git-specific scan request types |
