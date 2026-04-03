@@ -882,7 +882,7 @@ know stays on the coordinator side.
 ## Supporting Modules: Events, Run Errors, and Session
 
 The coordination crate contains several supporting modules not covered in detail
-in this chapter but worth noting for orientation:
+in this chapter but worth noting for orientation. Additional modules (`conformance.rs` for cross-backend behavioral equivalence testing, `shard_limits.rs` for shard limit checking, `split_execution.rs` for split ID derivation and payload hashing, `facade.rs` for the `CoordinationFacade` super-trait, and the `sim/` directory with 20 simulation modules) are covered in later chapters.
 
 ### `events.rs` -- State Transition Events
 

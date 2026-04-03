@@ -304,10 +304,20 @@ The tracing setup uses `tracing-subscriber` with `EnvFilter`:
 
 ```rust
 fn init_tracing() {
-    let filter = EnvFilter::builder()
+    let filter = match EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
+        .from_env()
+    {
+        Ok(f) => f,
+        Err(err) => {
+            eprintln!("WARNING: malformed RUST_LOG directive ({err}); falling back to default");
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy()
+        }
+    };
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(filter)
         .with_target(false)
         .compact()
@@ -315,4 +325,4 @@ fn init_tracing() {
 }
 ```
 
-`RUST_LOG` is honored if present. The default is `info`. Partial or lossy directives are accepted silently. The `.with_target(false)` suppresses the module path from log lines (redundant when the binary is the only process). The `.compact()` format produces single-line log entries suitable for structured log aggregation.
+`RUST_LOG` is honored if present. The default is `info`. If the directive is malformed, a warning is printed to stderr and the filter falls back to lossy parsing so the process still starts. The `.with_writer(std::io::stderr)` sends tracing output to stderr, keeping stdout clean for structured finding output. The `.with_target(false)` suppresses the module path from log lines (redundant when the binary is the only process). The `.compact()` format produces single-line log entries suitable for structured log aggregation.

@@ -258,13 +258,16 @@ The corresponding `wait_done_ledger` combines the handle wait with validation:
 ### Transition 3: ItemDurable → CheckpointDurable
 
 ```rust
-// From crates/gossip-contracts/src/persistence/page_commit.rs:462-475
+// From crates/gossip-contracts/src/persistence/page_commit.rs:674-689
     pub fn record_checkpoint(
         self,
         receipt: CheckpointCommitReceipt,
     ) -> Result<PageCommit<CheckpointDurable>, PageCommitValidationError> {
         if receipt.scope() != self.scope() {
-            return Err(PageCommitValidationError::CheckpointScopeMismatch);
+            return Err(PageCommitValidationError::CheckpointScopeMismatch {
+                expected: Box::new(self.scope().clone()),
+                actual: Box::new(receipt.scope().clone()),
+            });
         }
 
         let page_commit = PageCommitReceipt::new(self.state.item_commit, receipt);

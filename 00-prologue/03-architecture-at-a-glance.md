@@ -267,6 +267,7 @@ graph LR
         SEIT[scanner-engine-integration-tests]
         SG[scanner-git]
         SS[scanner-scheduler]
+        GO[gossip-orchestrator]
         GSR[gossip-scanner-runtime]
         GW[gossip-worker]
         GST[gossip-stdx]
@@ -308,6 +309,11 @@ graph LR
     SS -.->|depends on| GST
     SS -.->|dev depends on| GCN
     GSR -.->|depends on| GCN
+    GSR -.->|depends on| GO
+    GO -.->|depends on| GC
+    GO -.->|depends on| GCO
+    GO -.->|depends on| GF
+    GO -.->|depends on| SG
     GW -.->|depends on| GSR
     CLI -.->|depends on| GSR
 
@@ -328,6 +334,7 @@ graph LR
     style SG fill:#99ff99
     style SS fill:#99ff99
     style GSR fill:#99ff99
+    style GO fill:#99ff99
     style GW fill:#99ff99
     style CLI fill:#99ff99
 ```
@@ -340,6 +347,7 @@ graph LR
 - **gossip-coordination**: In-memory coordinator reference backend, simulation harness (20 sim modules), session management, lease validation, split execution, event system (trait contracts are in gossip-contracts)
 - **gossip-coordination-etcd**: etcd-backed coordination backend (production coordinator)
 - **gossip-connectors**: In-memory, filesystem, and git connectors with scan-driver adapters
+- **gossip-orchestrator**: Reusable control-plane surfaces for request normalization, shard geometry planning, payload encoding, and run setup (filesystem and Git submission contracts)
 - **gossip-persistence-inmemory**: Reference in-memory persistence backends (`InMemoryDoneLedger`, `InMemoryFindingsSink`) with lattice merge, fault injection, and delayed-completion mode for simulation
 - **gossip-pg-common**: Shared PostgreSQL utilities (connection pooling, migrations) used by production persistence backends
 - **gossip-done-ledger-postgres**: Production PostgreSQL-backed done-ledger implementation
