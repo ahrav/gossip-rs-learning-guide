@@ -361,7 +361,7 @@ pub enum Task {
         buffer: TsBufferHandle,
         /// Absolute offset of buffer[0] in the object
         base_offset: u64,
-        /// Valid bytes in buffer (u32 sufficient: BUFFER_LEN_MAX is 8 MiB)
+        /// Valid bytes in buffer (u32 sufficient: BUFFER_LEN_MAX is 4MB)
         len: u32,
         /// Overlap prefix bytes (for cross-chunk dedup)
         prefix_len: u32,

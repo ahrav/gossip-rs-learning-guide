@@ -167,7 +167,7 @@ gossip-findings-postgres → gossip-contracts, gossip-pg-common
 gossip-scanner-runtime   → gossip-contracts, gossip-connectors, gossip-coordination,
                            gossip-frontier, gossip-orchestrator, gossip-stdx,
                            scanner-engine, scanner-scheduler, scanner-git
-gossip-orchestrator      → gossip-coordination, gossip-frontier
+gossip-orchestrator      → gossip-coordination, gossip-contracts, gossip-frontier, scanner-git
 gossip-worker            → gossip-scanner-runtime, gossip-contracts,
                            gossip-coordination-etcd, gossip-done-ledger-postgres,
                            gossip-findings-postgres

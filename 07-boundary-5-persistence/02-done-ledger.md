@@ -346,30 +346,38 @@ From `done_ledger.rs`:
 
 ```rust
 pub fn validate(&self) -> Result<(), PersistenceInputError> {
+    let status_name = match self.status {
+        DoneLedgerStatus::ScannedClean => "ScannedClean",
+        DoneLedgerStatus::ScannedWithFindings => "ScannedWithFindings",
+        DoneLedgerStatus::FailedRetryable => "FailedRetryable",
+        DoneLedgerStatus::FailedPermanent => "FailedPermanent",
+        DoneLedgerStatus::Skipped => "Skipped",
+    };
+
     match self.status {
         DoneLedgerStatus::ScannedClean => {
             if self.findings_count != 0 {
                 return Err(PersistenceInputError::InconsistentFindingsCount {
-                    status: "ScannedClean",
+                    status: status_name,
                     findings_count: self.findings_count,
                 });
             }
             if self.error_code.is_some() {
                 return Err(PersistenceInputError::UnexpectedErrorCode {
-                    status: "ScannedClean",
+                    status: status_name,
                 });
             }
         }
         DoneLedgerStatus::ScannedWithFindings => {
             if self.findings_count == 0 {
                 return Err(PersistenceInputError::InconsistentFindingsCount {
-                    status: "ScannedWithFindings",
+                    status: status_name,
                     findings_count: self.findings_count,
                 });
             }
             if self.error_code.is_some() {
                 return Err(PersistenceInputError::UnexpectedErrorCode {
-                    status: "ScannedWithFindings",
+                    status: status_name,
                 });
             }
         }
@@ -378,7 +386,7 @@ pub fn validate(&self) -> Result<(), PersistenceInputError> {
         | DoneLedgerStatus::Skipped => {
             if self.error_code.is_none() {
                 return Err(PersistenceInputError::MissingErrorCode {
-                    status: "FailedRetryable", // or the actual variant name
+                    status: status_name,
                 });
             }
         }
@@ -521,6 +529,7 @@ pub fn try_new(code: impl Into<String>) -> Result<Self, PersistenceInputError> {
             max: MAX_DONE_LEDGER_ERROR_CODE_SIZE,
         });
     }
+    let mut all_spaces = true;
     for (index, byte) in code.bytes().enumerate() {
         let ok = byte.is_ascii_alphanumeric()
             || matches!(byte, b' ' | b'_' | b'-' | b'.' | b':' | b'/');
@@ -531,6 +540,14 @@ pub fn try_new(code: impl Into<String>) -> Result<Self, PersistenceInputError> {
                 byte,
             });
         }
+        if byte != b' ' {
+            all_spaces = false;
+        }
+    }
+    if all_spaces {
+        return Err(PersistenceInputError::Empty {
+            field: "DoneLedgerErrorCode",
+        });
     }
     Ok(Self(code.into_boxed_str()))
 }

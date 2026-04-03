@@ -118,6 +118,10 @@ etcd-backed coordination backend implementing the full coordination trait surfac
 | `crates/gossip-coordination-etcd/src/sim_etcd_kv.rs` | 08-05 | Simulated etcd key-value store |
 | `crates/gossip-coordination-etcd/src/test_support.rs` | 04-12 | Test support utilities for etcd backend |
 | `crates/gossip-coordination-etcd/src/tests.rs` | 04-12 | Integration tests for the etcd backend |
+| `crates/gossip-coordination-etcd/src/backend/coordinator.rs` | 04-08, 04-11 | `EtcdCoordinator` core: struct definition, `connect()`, shared helpers |
+| `crates/gossip-coordination-etcd/src/backend/run_management.rs` | 04-08 | `RunManagement`, `AsyncRunManagement`, and `ShardClaiming` implementations |
+| `crates/gossip-coordination-etcd/src/backend/shard_coordination.rs` | 04-08 | `CoordinationBackend` and `AsyncCoordinationBackend` implementations |
+| `crates/gossip-coordination-etcd/src/backend/test_support.rs` | 04-12 | Test support utilities for etcd backend submodules |
 
 ### gossip-frontier (Boundary 3: Shard Algebra)
 
@@ -235,6 +239,8 @@ Postgres-backed findings sink implementing the `FindingsSink` trait. Production 
 | `crates/gossip-findings-postgres/src/tests.rs` | 07-05 | Integration tests |
 | `crates/gossip-findings-postgres/src/test_postgres.rs` | 07-05 | Postgres test utilities |
 | `crates/gossip-findings-postgres/src/tests/merge_parity_proptest.rs` | 07-03 | Merge parity property tests |
+| `crates/gossip-findings-postgres/tests/common/mod.rs` | 07-05 | Shared test utilities for integration tests |
+| `crates/gossip-findings-postgres/tests/findings_pg_integration.rs` | 07-05 | Findings Postgres integration tests |
 
 ### gossip-pg-common (Boundary 5 — shared Postgres utilities)
 

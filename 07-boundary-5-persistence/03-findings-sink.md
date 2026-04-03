@@ -351,7 +351,7 @@ pub fn from_persisted(
         });
     }
 
-    record.location = location;
+    record.location = location.map(Arc::new);
     Ok(record)
 }
 ```
