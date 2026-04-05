@@ -2,233 +2,150 @@
 
 ## The Central Question
 
-Could we build Gossip-rs as a single-process system? Why introduce the complexity of distributed coordination, failure handling, and network partitions?
+Could Gossip-rs stay a single-process scanner?
 
-The answer lies in four fundamental constraints that push us toward distribution.
+For direct local scans, yes. The source tree still supports local filesystem and Git entrypoints. But the moment we want durable multi-worker progress, lease handoff, and bounded replay across failures, a single-process design stops being enough.
+
+The pressure comes from four constraints.
 
 ## Constraint 1: Scale Drives Distribution
 
-A single machine cannot scan all sources fast enough.
+A single process can scan bytes. It cannot indefinitely keep up with:
 
-### The Numbers
+- large filesystem trees,
+- deep Git history,
+- repeated re-scans after crashes or retries,
+- and durable writes that must happen without blocking future work forever.
 
-Consider a medium-sized enterprise:
+The scanner crates in the repo already reflect that split:
 
-- 10,000 GitHub repositories
-- 50 commits per repository per day
-- Average 100 files changed per commit
-- 5 detection policies per file (API keys, AWS, GCP, database credentials, etc.)
+- `scanner-engine` owns the detection engine
+- `scanner-scheduler` owns high-throughput filesystem execution
+- `scanner-git` owns the Git pipeline
+- `gossip-scanner-runtime` composes those pieces into direct and distributed worker paths
 
-**Total daily work**: 10,000 × 50 × 100 × 5 = **250 million detection operations per day**
+That separation exists because throughput and durability are no longer one concern.
 
-If each detection takes 1ms (optimistic), that's:
-
-```
-250,000,000 ms = 250,000 seconds = 69 hours
-```
-
-A single machine would fall 3 days behind every day.
-
-### Horizontal Scaling
-
-The solution is horizontal scaling: add more machines to process work in parallel.
-
-```mermaid
-graph TD
-    subgraph Single Machine
-        M[Machine]
-        M --> |69 hours| R[250M operations]
-    end
-
-    subgraph Distributed System
-        M1[Machine 1] --> |2.3 hours| R1[83M operations]
-        M2[Machine 2] --> |2.3 hours| R2[83M operations]
-        M3[Machine 3] --> |2.3 hours| R3[84M operations]
-    end
-
-    style M fill:#ff9999
-    style M1 fill:#99ff99
-    style M2 fill:#99ff99
-    style M3 fill:#99ff99
-```
-
-With 30 machines, we complete the same work in 2.3 hours—well within the 24-hour window.
-
-**Distribution is not optional; it's required by the problem scale.**
+**Distribution is what lets the system scale scan execution and failure handling independently.**
 
 ## Constraint 2: Failure Isolation
 
-In a monolithic system, one component failure brings down the entire system.
+A monolith has a large blast radius. A distributed system can stop one bad shard, one bad repo, or one bad connector path without stopping everything else.
 
-### Blast Radius
+In the current code, the failure boundaries are concrete:
 
-Suppose we're scanning multiple sources:
+- ordered-content shards can fail independently of Git repo-frontier shards,
+- connector errors carry a retry posture through `ErrorClass`,
+- coordination can park a shard or let a lease expire without corrupting the rest of the run,
+- durable writes are isolated behind persistence interfaces instead of being fused into the scan loop.
 
-- GitHub repositories (stable API)
-- GitLab repositories (stable API)
-- AWS S3 buckets (stable API)
-- Internal wiki (flaky API, frequent timeouts)
-
-In a single-process system, if the wiki API hangs, the entire scanner blocks. GitHub, GitLab, and S3 scanning stop, even though their APIs are healthy.
-
-### Isolation Through Distribution
-
-By running separate workers for each source type, we isolate failures:
-
-```mermaid
-graph LR
-    subgraph Coordinator
-        CO[Coordinator]
-    end
-
-    subgraph Workers
-        W1[GitHub Worker]
-        W2[GitLab Worker]
-        W3[S3 Worker]
-        W4[Wiki Worker]
-    end
-
-    CO --> W1
-    CO --> W2
-    CO --> W3
-    CO --> W4
-
-    W4 --> |TIMEOUT| X[Crash]
-
-    style W4 fill:#ff9999
-    style W1 fill:#99ff99
-    style W2 fill:#99ff99
-    style W3 fill:#99ff99
-```
-
-When the wiki worker crashes due to API timeouts, GitHub, GitLab, and S3 workers continue processing. The blast radius is contained.
-
-**Distribution provides fault isolation: one component failure doesn't cascade.**
+That means one failure does not have to become a global stop-the-world event.
 
 ## Constraint 3: Work Partitioning
 
-We need to divide the global keyspace into shards and assign shards to workers.
+The current system does **not** partition work by hashing `StableItemId` into a giant 256-bit bucket space.
 
-### The Keyspace
+Instead, it partitions **ordered connector keyspaces**.
 
-Every scan item (file in a repo, object in S3) has a stable identifier derived from its content and location. This is the **ItemID** from Boundary 1.
+The pieces are:
 
-The set of all ItemIDs forms a keyspace. For BLAKE3 hashes (256 bits), the keyspace is:
+- `ShardSpec`: a half-open key range `[start, end)` stored by the coordination layer
+- `Cursor`: durable progress within that range
+- `KeyEncoding`: the `gossip-frontier` contract that turns typed keys into byte strings whose lexicographic order matches logical order
+- `PathKey` and `ManifestRowKey`: concrete key types used by the current shard-algebra layer
 
-```
-2^256 ≈ 10^77 possible ItemIDs
-```
+Conceptually, a run looks more like this:
 
-This is astronomically large—far more than the number of atoms in the observable universe.
-
-### Sharding
-
-We partition this keyspace into contiguous ranges called **shards**:
-
-```
-Shard 1: 0x0000...0000 to 0x3fff...ffff
-Shard 2: 0x4000...0000 to 0x7fff...ffff
-Shard 3: 0x8000...0000 to 0xbfff...ffff
-Shard 4: 0xc000...0000 to 0xffff...ffff
+```text
+Shard A: [apps/, infra/)
+Shard B: [infra/, services/)
+Shard C: [services/, end)
 ```
 
-Each worker is assigned one or more shards. When a worker computes an ItemID, it checks whether the ID falls in its assigned range. If yes, it processes the item; otherwise, it ignores it.
+or, for manifest-style startup plans:
 
-```rust
-fn should_process(item_id: &ItemID, shard_range: &Range) -> bool {
-    shard_range.contains(item_id.as_bytes())
-}
+```text
+Shard A: [manifest 7 row 0, manifest 7 row 1000)
+Shard B: [manifest 7 row 1000, manifest 7 row 2000)
 ```
 
-**Distribution requires partitioning the global keyspace into worker-assigned shards.**
+This matters because workers do not ask "does this hash fall in my bucket?" They ask "is this ordered key still inside my shard range, and where should my cursor resume?"
 
 ### Why Range-Based Sharding?
 
-We could use hash-based sharding (e.g., consistent hashing), but range-based sharding has key advantages:
+Range-based shards are a good fit for the implementation that exists today:
 
-1. **Ordered enumeration**: Workers can enumerate items in key order, enabling efficient done ledger lookups
-2. **Range splitting**: Shards can be split when they become too large, without rehashing
-3. **Coverage verification**: Easy to verify that every key in the keyspace is covered by exactly one shard
+1. **Ordered enumeration**: connectors already expose ordered pages and resumable cursors
+2. **Cheap splitting**: `gossip-frontier` can compute successor keys and split boundaries without rehashing the world
+3. **Coverage checks**: half-open ranges make it possible to reason about gaps, overlaps, and split correctness
 
-This is the design used by Spanner [Corbett et al., 2012] and CockroachDB—battle-tested at Google and Cockroach Labs scale.
+That is why `gossip-frontier` exists as its own boundary instead of burying shard math inside one connector.
 
 ## Constraint 4: Exactly-Once Processing
 
-Workers crash, networks partition, and requests timeout. Yet every item must be scanned **exactly once**.
+Distributed work becomes complicated when a worker can crash in the middle of a shard.
 
-### The Challenge
+The practical failure story looks like this:
 
-Consider this scenario:
+1. A worker claims a shard lease
+2. It scans some items
+3. It submits findings and completion state to durable backends
+4. It crashes before the next checkpoint is safely recorded
+5. Another worker later reclaims the shard
 
-1. Worker 1 acquires shard [0x0000...0000, 0x3fff...ffff]
-2. Worker 1 scans item `0x1234...5678` and finds a secret
-3. Worker 1 crashes before writing to done ledger
-4. Coordinator reassigns shard to Worker 2
-5. Worker 2 scans item `0x1234...5678` again
+To make retries safe, Gossip-rs uses two layers of protection.
 
-Did we scan the item once or twice? If the first scan completed, we've duplicated work. If it didn't complete, the finding is lost.
+### Coordination-layer idempotency
 
-### The Solution: Idempotency + Done Ledger
+Each shard keeps a bounded FIFO op-log. The replay key is not just "same operation name"; it is the pair of:
 
-Gossip-rs uses two mechanisms:
-
-**1. Idempotency Keys (Boundary 2)**:
-
-Every work submission includes a unique idempotency key derived from the ItemID and operation. Resubmissions with the same key are deduplicated.
-
-```rust
-// Conceptual pseudocode -- the actual implementation uses OpId with a
-// BLAKE3 payload hash and a 16-entry FIFO ring buffer op-log per shard,
-// not a standalone IdempotencyKey struct.
-struct WorkSubmission {
-    item_id: ItemID,
-    operation: Operation,
-    op_id: OpId, // BLAKE3 payload hash for replay detection
-}
+```text
+(OpId, payload_hash)
 ```
 
-**2. Done Ledger (Boundary 5)**:
+That lets the coordinator distinguish:
 
-A persistent, append-only log of completed items. Before processing an item, workers check the done ledger. After processing, they append an entry.
+- a true replay of the same operation,
+- a buggy reuse of the same `OpId` with different parameters,
+- and a genuinely new operation.
 
+### Persistence-layer durability
+
+The done ledger and findings sink absorb duplicate attempts through deterministic identities and idempotent writes.
+
+The done-ledger key is not "one row per item." It is a tenant- and policy-scoped object-version identity:
+
+```text
+(TenantId, PolicyHash, OvidHash)
 ```
-Check done ledger → Not found → Process item → Append to done ledger
-                     Found → Skip (already processed)
-```
 
-The combination guarantees exactly-once semantics even with failures:
+where `OvidHash` is derived from `(StableItemId, VersionId)`.
 
-```
-at-least-once delivery + idempotent processing = exactly-once semantics
-```
+The worker runtime then advances checkpoints only after durable receipts come back from the persistence path. That is the bridge from at-least-once execution to exactly-once-effective progress.
 
-This is the **Dataflow Model** [Akidau et al., 2015], used by Google Cloud Dataflow, Apache Beam, and Flink.
-
-**Distribution requires mechanisms for exactly-once processing despite failures.**
+**Distribution requires replay-safe coordination and receipt-driven durable progress.**
 
 ## Putting It Together
 
-Distribution is not a choice—it's forced by the problem:
+Distribution is not a flourish. It is the mechanism that makes the current architecture viable.
 
 | Constraint | Why Distribution | Gossip-rs Solution |
 |------------|------------------|-------------------|
-| **Scale** | Single machine too slow | Horizontal scaling with 30+ workers |
-| **Failure Isolation** | One failure shouldn't stop everything | Separate workers per source type |
-| **Work Partitioning** | Need to divide keyspace | Range-based sharding (Boundary 3) |
-| **Exactly-Once** | Crashes and retries are inevitable | Idempotency keys + done ledger |
-
-The rest of this guide explains how Gossip-rs implements these solutions correctly.
+| **Scale** | Scan execution, Git history traversal, and durability must progress independently | Separate runtime crates and worker paths |
+| **Failure Isolation** | One bad shard or connector path should not stop the rest of the run | Lease-based coordination, shard parking, and isolated worker execution |
+| **Work Partitioning** | Workers need resumable, splittable ownership of ordered work | `ShardSpec` + `Cursor` + `gossip-frontier` key encoding |
+| **Exactly-Once** | Crashes and retries are inevitable | Op-log idempotency + idempotent persistence + receipt-driven checkpointing |
 
 ## The Coordination Layer
 
-To make distribution work, we need a coordination layer that:
+To make all of that work, the system needs a coordination layer that:
 
-1. **Assigns shards to workers** via time-bounded leases
-2. **Detects worker failures** and reassigns shards
-3. **Prevents split-brain** where two workers think they own the same shard
-4. **Ensures exactly-once semantics** through idempotency
+1. Assigns shards to workers through time-bounded leases
+2. Detects stale owners with fence epochs
+3. Supports checkpoint, split, park, and completion transitions
+4. Lets workers retry safely without duplicating state transitions
 
-This is **Boundary 2 (Coordination)**, the subject of Chapters 3 and 4.
+That is **Boundary 2 (Coordination)**, covered in Section 04 of the guide.
 
 ## What's Next
 
