@@ -150,7 +150,7 @@ See **[→ Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)
 
 **Important distinction**:
 
-`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types. They are not the persistence boundary itself; they adapt scan-loop callbacks into the persistence commit pipeline.
+`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types, but they are still part of Boundary 5's execution-facing persistence surface in this guide. They adapt scan-loop callbacks into the persistence commit pipeline.
 
 **Status**: 🔧 **Contracts and backends implemented; runtime composition continues to evolve**
 
