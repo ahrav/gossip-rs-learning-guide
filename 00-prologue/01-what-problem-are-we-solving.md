@@ -2,24 +2,24 @@
 
 ## The Secret Sprawl Problem
 
-Modern software development involves hundreds of third-party services: cloud providers, CI/CD systems, package registries, analytics vendors, monitoring stacks, and internal platforms. Each service requires authentication credentials: API keys, access tokens, service account keys, database passwords.
+Modern software development involves source trees, local mirrors, build artifacts, archives, and Git history. All of those places can carry authentication credentials—API keys, access tokens, service account keys, database passwords.
 
 These secrets inevitably leak:
 
 - **Hardcoded in source code**: Developers commit `.env` files, config files with hardcoded credentials, or directly embed API keys in code
-- **Stored in internal documentation**: setup guides and runbooks can accidentally contain live credentials
-- **Copied into local archives or exports**: tarballs, zip files, and backups preserve credentials long after the original file changes
-- **Scattered across repository history and mirrors**: forks, bare mirrors, and archived repositories retain stale but still-valid credentials
+- **Stored in wikis and documentation**: Setup guides contain example credentials that are actually production keys
+- **Copied into archives and backups**: ZIP files, mirrored worktrees, and exported snapshots often preserve credentials long after the original secret should have been rotated
+- **Scattered across repositories**: local clones, mirrors, forks, and archived repositories contain stale but still-valid credentials
 
 Once a secret leaks, attackers find it quickly. Automated bots scan public GitHub repositories within minutes of a commit. The impact ranges from unauthorized API usage to complete infrastructure takeover.
 
 ## The Scale Challenge
 
-A single scan target is often manageable. The hard part is the aggregate volume:
+A modern enterprise might have:
 
-- **Many Git repositories**: each with years of history, branches, and tags
-- **Large filesystem trees**: build outputs, vendored dependencies, extracted archives, and developer workspaces
-- **Continuous updates**: new commits, new files, and repeated rescans under changing policies
+- **Thousands of local Git repositories**: mirrored from internal or hosted source-control systems
+- **Large filesystem trees**: monorepos, home directories, build outputs, mounted volumes
+- **Continuous updates**: frequent commits, generated artifacts, and repeated archive extraction
 
 Scanning this volume requires distributed processing. A single machine cannot:
 
@@ -34,35 +34,36 @@ Scanning this volume requires distributed processing. A single machine cannot:
 The same secret often appears in multiple locations:
 
 ```text
-Git repo:         /srv/mirrors/acme/backend.git
-Developer clone:  /home/alice/src/backend
-Fork clone:       /home/bob/src/backend
-Archive extract:  /tmp/backend-2023-snapshot
+Canonical repo:    /srv/mirrors/acme/backend.git
+Working clone:     /home/dev/backend
+Archive copy:      /backups/backend-2023.zip
+Extracted tree:    /tmp/recovery/backend/
+Second mirror:     /srv/mirrors/acme/backend-archive.git
 ```
 
 A naive scanner finds the same AWS access key 5 times and generates 5 alerts. This creates alert fatigue—security teams ignore duplicate findings.
 
 **We need content-addressed deduplication**: the same secret gets the same identity regardless of where it's found.
 
-This is the core insight behind **Boundary 1 (Identity & Hashing Spine)**: use cryptographic hashing to derive stable, collision-resistant identifiers for scan items, policy versions, findings, and related coordination records.
+This is the core insight behind **Boundary 1 (Identity & Hashing Spine)**: use cryptographic hashing to derive stable, collision-free identifiers for every entity (repositories, policies, scan items, findings).
 
 ## The Tenant Isolation Requirement
 
-The current codebase is built around **tenant-scoped identity**: `TenantId` and `TenantSecretKey` flow into identity derivation, coordination APIs, and persistence records so that work and findings stay tenant-local.
+Gossip-rs is designed as a **multi-tenant SaaS**: multiple organizations share the same infrastructure, but each organization's data must be cryptographically isolated.
 
 **Isolation requirements:**
 
 1. **No cross-tenant enumeration**: Tenant A cannot discover what repositories Tenant B has scanned
 2. **No cross-tenant correlation**: Tenant A cannot infer whether Tenant B found a specific secret
-3. **No identifier reuse at the finding layer**: The same secret scanned by two tenants must not produce linkable tenant-scoped finding identities
+3. **No identifier reuse**: The same repository scanned by two tenants gets different `StableItemId` values
 
-This is enforced through **tenant-derived keying**: tenant-specific secret material enters secret hashing and downstream finding derivation, making cross-tenant correlation cryptographically difficult.
+This is enforced through a per-tenant `TenantSecretKey`: secret-derived identities are keyed per tenant, making them cryptographically unlinkable across tenants.
 
-```text
+```
 Tenant A: SecretHash = BLAKE3-keyed(TenantSecretKey_A, normalized_secret)
 Tenant B: SecretHash = BLAKE3-keyed(TenantSecretKey_B, normalized_secret)
 
-Even if scanning the same secret, SecretHash_A != SecretHash_B
+Even if scanning the same secret, SecretHash_A ≠ SecretHash_B
 ```
 
 (This is a simplified view. BLAKE3 keyed mode incorporates the key directly into the compression IV—it is not HMAC. The actual derivation chain feeds SecretHash into FindingId via BLAKE3 derive-key mode with additional inputs like tenant, item, and rule.)
@@ -84,42 +85,46 @@ at-least-once delivery + idempotent processing = exactly-once semantics
 
 Gossip-rs implements this through:
 
-- **Bounded idempotency in coordination** (B2): shard mutations carry `OpId` values that are replay-checked against a per-shard op-log
-- **Done ledger** (B5): persistent record of completed items; prevents reprocessing after crashes
+- **`OpId` replay detection** (B2): coordination operations carry an `OpId` and are deduplicated against a bounded per-shard op-log
+- **Done ledger + receipt ordering** (B5): persistence records completed work durably and uses `PageCommit` ordering to keep findings, completion, and checkpoints in sync
 
 ## System Architecture
 
 ```mermaid
 graph LR
-    subgraph Sources
+    subgraph Inputs
         FS[Filesystem trees]
-        GR[Git repositories]
-        IM[In-memory fixtures]
+        GR[Local Git repositories]
     end
 
-    subgraph ControlPlane
-        ORCH[Orchestrator / CLI]
-        CO[Coordination backend]
+    subgraph Control
+        OR[gossip-orchestrator]
+        CO[gossip-coordination]
     end
 
-    subgraph DataPlane
-        WR[Worker runtime]
-        SE[Scanner engine]
+    subgraph Execution
+        WK[gossip-worker / scanner-rs-cli]
+        RT[gossip-scanner-runtime]
+        CN[gossip-connectors]
+        SG[scanner-git / scanner-scheduler]
+        SE[scanner-engine]
     end
 
     subgraph Persistence
-        DL[Done ledger]
-        FI[Findings sink]
+        DL[DoneLedger]
+        FI[FindingsSink]
     end
 
-    ORCH --> CO
-    CO --> WR
-    FS --> WR
-    GR --> WR
-    IM --> WR
-    WR --> SE
-    WR --> DL
-    WR --> FI
+    FS --> CN
+    GR --> CN
+    OR --> CO
+    CO --> WK
+    WK --> RT
+    CN --> RT
+    RT --> SG
+    RT --> SE
+    RT --> DL
+    RT --> FI
 
     style CO fill:#ff9999
     style DL fill:#99ccff
@@ -128,30 +133,25 @@ graph LR
 
 ### Component Roles
 
-**Orchestrator / CLI**:
-- Normalizes scan requests and plans initial shard geometry
-- Starts runs through the coordination layer
-- Can also dispatch local direct-mode scans through the runtime
+**Orchestrator + Coordination**:
+- Normalize scan requests and initial shard geometry
+- Assign shard work via leases and fencing
+- Track progress and coordinate retries or splits
 
-**Coordination backend**:
-- Registers runs and shards
-- Assigns shard leases to workers with fencing
-- Tracks checkpoints, renewals, parking, and split operations
+**Worker + Runtime**:
+- Acquire work from coordination (distributed mode) or run scans directly (CLI mode)
+- Dispatch filesystem scans through the ordered-content runtime and Git scans through the repo runtime
+- Build the engine, execute scans, and translate results into durable receipts
 
-**Worker runtime**:
-- Hydrates shard state from coordination
-- Enumerates items from filesystem or Git sources
-- Scans content for secrets using the scanner engine
-- Commits findings and authoritative completion state
+**Connectors and Scanner Crates**:
+- `gossip-connectors` enumerates filesystem pages and exposes git-family connector contracts
+- `scanner-scheduler` and `scanner-git` perform the source-specific heavy lifting
+- `scanner-engine` performs rule matching and normalization
 
-**Done ledger**:
-- Durable record of completed work
-- Prevents reprocessing after retries or crashes
-- Participates in the exactly-once story
-
-**Findings sink**:
-- Durable persistence for findings, occurrences, and observations
-- Supports in-memory testing backends and PostgreSQL production backends
+**Persistence**:
+- `DoneLedger` records durable completion state
+- `FindingsSink` stores stable finding, occurrence, and observation records
+- `PageCommit` preserves the ordering between findings durability, completion, and checkpoints
 
 ## Why This Is Hard
 
@@ -161,7 +161,7 @@ The combination of requirements makes this a challenging distributed systems pro
 2. **Deduplication**: Content-addressed identity across sources
 3. **Isolation**: Cryptographic tenant separation
 4. **Exactly-once**: No data loss, no duplication, despite failures
-5. **Performance**: enough throughput to keep up with large trees and repository history
+5. **Performance**: High-throughput scanning without losing determinism or durability
 
 Off-the-shelf solutions (message queues, batch processing frameworks) don't provide all these properties simultaneously. Gossip-rs is purpose-built for this problem space.
 

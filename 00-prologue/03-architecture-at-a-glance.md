@@ -1,226 +1,289 @@
 # Architecture at a Glance
 
-## The Five-Boundary Model
+## The Boundary Model in Today's Codebase
 
-The guide is organized around five architectural boundaries. The codebase does not put each boundary in exactly one crate, but the separation is real: identity stays low-level, coordination owns shard lifecycle, shard algebra owns ordered key ranges, connectors enumerate source data, and persistence owns durable results.
+Gossip-rs still uses the five-boundary vocabulary, but the code is no longer just five abstract boxes. The workspace now splits into:
+
+1. **Contracts and core boundary types**: `gossip-contracts`
+2. **Boundary implementations**: `gossip-frontier`, `gossip-coordination`, `gossip-connectors`, and the persistence backends
+3. **Scanner/runtime crates**: `scanner-engine`, `scanner-scheduler`, `scanner-git`, `gossip-orchestrator`, `gossip-scanner-runtime`, `gossip-worker`, and `scanner-rs-cli`
 
 ```mermaid
 graph TD
-    B1[B1: Identity]
-    B2[B2: Coordination]
-    B3[B3: Shard Algebra]
-    B4[B4: Connector]
-    B5[B5: Persistence]
+    STDX[gossip-stdx]
+    GC[gossip-contracts]
+    GF[gossip-frontier]
+    GCO[gossip-coordination]
+    GCE[gossip-coordination-etcd]
+    GCN[gossip-connectors]
+    GPI[gossip-persistence-inmemory]
+    GPC[gossip-pg-common]
+    GDL[gossip-done-ledger-postgres]
+    GFI[gossip-findings-postgres]
+    SE[scanner-engine]
+    SS[scanner-scheduler]
+    SG[scanner-git]
+    GO[gossip-orchestrator]
+    GSR[gossip-scanner-runtime]
+    GW[gossip-worker]
+    CLI[scanner-rs-cli]
 
-    B2 --> B1
-    B3 --> B1
-    B4 --> B1
-    B5 --> B1
-    B2 --> B3
+    GC --> STDX
+    GF --> GC
+    GF --> STDX
+    GCO --> GC
+    GCO --> STDX
+    GCE --> GCO
+    GCE --> GC
+    GCE --> STDX
+    GCN --> GC
+    GCN --> STDX
+    GCN --> SE
+    GCN --> SG
+    GCN --> SS
+    GPI --> GC
+    GDL --> GC
+    GDL --> GPC
+    GFI --> GC
+    GFI --> GPC
+    SS --> SE
+    SS --> STDX
+    SG --> GC
+    SG --> SE
+    SG --> SS
+    SG --> STDX
+    GO --> GCO
+    GO --> GC
+    GO --> GF
+    GO --> SG
+    GSR --> GCO
+    GSR --> GCN
+    GSR --> GC
+    GSR --> GF
+    GSR --> GO
+    GSR --> SE
+    GSR --> SG
+    GSR --> SS
+    GSR --> STDX
+    GW --> GCE
+    GW --> GDL
+    GW --> GFI
+    GW --> GC
+    GW --> GSR
+    CLI --> GSR
+
+    style GC fill:#99ccff
+    style STDX fill:#ffcc99
 ```
 
-### The Dependency Rule
+### The Actual Dependency Rule
 
-The important architectural rule is this:
+The important rule is not "B1 depends on literally nothing." The actual rule in the current workspace is:
 
-- **Identity is the leaf**: `gossip-contracts::identity` depends on nothing higher-level
-- **Shard algebra is shared infrastructure**: `gossip-frontier` bridges typed connector keys into byte ranges used by coordination
-- **Runtime crates compose boundaries, they do not redefine them**
+- **Identity does not depend on sibling boundaries**
+- **Higher layers build on shared contracts instead of reaching around them**
+- **`gossip-stdx` is the low-level utility crate beneath several boundaries**
+- **Scanner and runtime crates compose multiple boundaries together**
 
-That is why so many crates depend on `gossip-contracts`, while implementation crates such as `gossip-coordination`, `gossip-connectors`, and the PostgreSQL backends stay focused on their own boundary.
+So B1 remains the conceptual root of the boundary graph, but the crate graph includes shared infrastructure such as `gossip-stdx`, extracted scanner crates, and runtime orchestration crates.
 
-## Boundary 1: Identity
+## Boundary 1: Identity & Hashing Spine
 
-**Purpose**: stable, content-addressed identifiers and domain-separated hashing.
+**Purpose**: Provide deterministic, domain-separated identities for tenants, policies, items, findings, occurrences, and observations.
 
-**Key types**:
+**Key Types**:
 
 - `TenantId`
-- `TenantSecretKey`
 - `PolicyHash`
+- `TenantSecretKey`
 - `StableItemId`
-- `FindingId`, `OccurrenceId`, `ObservationId`
-- coordination IDs such as `RunId`, `ShardId`, `WorkerId`, and `OpId`
+- `FindingId`
+- `OccurrenceId`
+- `ObservationId`
 
-**Where it lives**:
+**What lives here**:
 
-- `crates/gossip-contracts/src/identity/`
+- Canonical encoding via `CanonicalBytes`
+- Domain-tag registry and BLAKE3 helpers
+- Item identity derivation (`ConnectorTag`, `ConnectorInstanceIdHash`, `ItemIdentityKey`)
+- Finding/occurrence/observation derivation
+- Golden-vector coverage for identity stability
 
-**What matters architecturally**:
+**Code**: `crates/gossip-contracts/src/identity/`
 
-- item identity and finding identity are different layers
-- tenant scoping is explicit in the identity model
-- the same `ItemIdentityKey` always derives the same `StableItemId`
+**Status**: ✅ Fully implemented
 
-See **[→ Boundary 1](../02-boundary-1-identity-spine/01-identity-problem-space.md)**.
+See **[→ Chapter 02: Boundary 1](../02-boundary-1-identity-spine/01-identity-problem-space.md)** for the detailed walkthrough.
 
 ## Boundary 2: Coordination
 
-**Purpose**: run lifecycle, shard lifecycle, leasing, fencing, replay detection, and worker claiming.
+**Purpose**: Assign shard work safely with leases and fencing, track run lifecycle, and make retries idempotent.
 
-**Core surfaces**:
+**Key Protocols**:
 
-- `CoordinationBackend`
-- `RunManagement`
-- `ShardClaiming`
-- `CoordinationFacade`
+1. **Lease acquisition** via `acquire_and_restore_into`
+2. **Lease renewal** via `renew`
+3. **Fencing** via monotonic `FenceEpoch`
+4. **Shard claiming** via `claim_next_available`
+5. **Replay detection** via `OpId` plus bounded per-shard op-log
 
-**Representative operations**:
+**Trait Hierarchy**:
 
-- `acquire_and_restore_into`
-- `checkpoint`
-- `renew`
-- `complete`
-- `park_shard`
-- `split_replace`
-- `split_residual`
-- `claim_next_available`
+```text
+CoordinationFacade
+  ├── CoordinationBackend
+  ├── RunManagement
+  └── ShardClaiming
+```
 
-**Where it lives**:
+**Implementations and support**:
 
-- shard data model in `crates/gossip-contracts/src/coordination/`
-- reference and simulation backends in `crates/gossip-coordination/`
-- production etcd backend in `crates/gossip-coordination-etcd/`
+- Shared shard data model in `gossip-contracts::coordination`
+- In-memory executable reference backend in `gossip-coordination`
+- Deterministic simulation harness in `gossip-coordination::sim`
+- Production etcd backend in `gossip-coordination-etcd`
 
-**What matters architecturally**:
+**Code**: `crates/gossip-contracts/src/coordination/`, `crates/gossip-coordination/`, `crates/gossip-coordination-etcd/`
 
-- workers hold time-bounded leases with fencing epochs
-- replay protection is bounded through per-shard `OpId` tracking
-- split operations mutate shard geometry without breaking coverage
+**Status**: ✅ Fully implemented
 
-See **[→ Boundary 2](../04-boundary-2-coordination/01-the-coordination-problem.md)**.
+See **[→ Chapter 04: Boundary 2](../04-boundary-2-coordination/01-the-coordination-problem.md)** for the full protocol.
 
 ## Boundary 3: Shard Algebra
 
-**Purpose**: turn connector-native ordered keys into shardable byte ranges.
+**Purpose**: Translate typed frontier keys into byte-range shards that coordination can store and split.
 
-**Key components**:
+**Key Components**:
 
 - `KeyEncoding`
 - `PathKey`
 - `ManifestRowKey`
+- `prefix_successor`, `key_successor`, `byte_midpoint`
 - `ShardHint` and `ShardMetadata`
 - `PreallocShardBuilder`
 
-**Where it lives**:
+**Important detail**: the shard algebra implementation lives in **`gossip-frontier`**, while the generic shard-range data model (`ShardSpec`, cursor checks, split validation) lives in `gossip-contracts::coordination`.
 
-- `crates/gossip-frontier/src/`
+**Code**: `crates/gossip-frontier/src/`
 
-**What matters architecturally**:
+**Status**: ✅ Fully implemented
 
-- sharding happens over lexicographically ordered byte ranges, not over `StableItemId`
-- connectors keep their own typed key models, while coordination stays generic over raw ranges
-- split planning depends on range arithmetic such as `prefix_successor` and `byte_midpoint`
-
-See **[→ Boundary 3](../05-boundary-3-shard-algebra/01-the-translation-layer.md)**.
+See **[→ Chapter 05: Boundary 3](../05-boundary-3-shard-algebra/01-the-translation-layer.md)** for the dedicated shard-algebra section.
 
 ## Boundary 4: Connector
 
-**Purpose**: enumerate source items and read their contents through a stable contract.
+**Purpose**: Model source-family enumeration and read contracts, then implement concrete connectors for the source types the runtime supports today.
 
-**Core contracts**:
+**Current source families**:
 
-- `OrderedContentSource`
-- `GitRepoExecutor`
-- `ErrorClass` and the shared connector error model
+- **Ordered content**: page-oriented enumeration over filesystem items
+- **Git repo execution**: repo discovery plus whole-repository Git execution
 
-**Current implementations**:
+**Concrete implementations in the workspace**:
 
+- `InMemoryDeterministicConnector`
 - `FilesystemConnector`
 - `GitConnector`
-- `InMemoryDeterministicConnector`
 
-**Where it lives**:
+**Contract surface**:
 
-- contracts in `crates/gossip-contracts/src/connector/`
-- implementations in `crates/gossip-connectors/`
+- Toxic-byte wrappers such as `ItemKey`, `ItemRef`, `TokenBytes`, and `ToxicDigest`
+- Ordered-content trait `OrderedContentSource`
+- Git-family traits such as `GitRepoDiscoverySource`, `GitMirrorManager`, and `GitRepoExecutor`
+- Reusable conformance harnesses in `gossip-contracts::connector::conformance`
 
-**What matters architecturally**:
+**Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
-- enumeration order is part of the contract
-- connector failures carry retry posture into orchestration decisions
-- source families are currently filesystem, Git, and deterministic in-memory fixtures
+**Status**: ✅ Fully implemented for local filesystem, local Git, and deterministic in-memory sources
 
-See **[→ Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)**.
+See **[→ Chapter 06: Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)** for the connector contract and implementations.
 
 ## Boundary 5: Persistence
 
-**Purpose**: durably record completed work and findings.
+**Purpose**: Make scan completion durable without losing findings or advancing checkpoints too early.
 
-**Core pieces**:
+**Key Components**:
 
-- done-ledger contracts
-- findings contracts (`FindingRecord`, `OccurrenceRecord`, `ObservationRecord`)
-- durable commit handles and receipts
+1. **`DoneLedger`**: durable completion records
+2. **`FindingsSink`**: stable finding, occurrence, and observation records
+3. **`PageCommit<S>`**: typestate-enforced ordering between findings durability, item completion, and checkpoint durability
+4. **`WriteContext` and OVID hashing**: shared routing and identity inputs for durable writes
 
-**Where it lives**:
+**Implementations**:
 
-- contracts in `crates/gossip-contracts/src/persistence/`
-- reference in-memory backends in `crates/gossip-persistence-inmemory/`
-- PostgreSQL backends in `crates/gossip-done-ledger-postgres/` and `crates/gossip-findings-postgres/`
-- shared PostgreSQL support in `crates/gossip-pg-common/`
+- Reference in-memory backends in `gossip-persistence-inmemory`
+- PostgreSQL done-ledger backend in `gossip-done-ledger-postgres`
+- PostgreSQL findings backend in `gossip-findings-postgres`
+- Shared PostgreSQL utilities in `gossip-pg-common`
 
-**What matters architecturally**:
+**Code**: `crates/gossip-contracts/src/persistence/`, `crates/gossip-persistence-inmemory/`, `crates/gossip-done-ledger-postgres/`, `crates/gossip-findings-postgres/`
 
-- exactly-once is not just a coordination claim; durability is part of it
-- the findings model is normalized into finding, occurrence, and observation layers
-- the repository already contains both test backends and production PostgreSQL backends
+**Status**: 🔧 Contracts plus reference and PostgreSQL backends implemented
 
-See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space.md)**.
+See **[→ Chapter 07: Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space.md)** for the persistence model.
 
-## Workspace Layout
+## Project Status Summary
 
-The pinned workspace currently contains these major crate groups:
+| Area | Status | Primary Crates |
+|------|--------|----------------|
+| **B1 Identity** | ✅ Implemented | `gossip-contracts::identity` |
+| **B2 Coordination** | ✅ Implemented | `gossip-contracts::coordination`, `gossip-coordination`, `gossip-coordination-etcd` |
+| **B3 Shard Algebra** | ✅ Implemented | `gossip-frontier` |
+| **B4 Connector** | ✅ Implemented | `gossip-contracts::connector`, `gossip-connectors` |
+| **B5 Persistence** | 🔧 Contracts + backends implemented | `gossip-contracts::persistence`, `gossip-persistence-inmemory`, PostgreSQL crates |
+| **Scanner Engine** | ✅ Extracted | `scanner-engine` |
+| **Scanner Scheduler** | ✅ Extracted | `scanner-scheduler` |
+| **Scanner Git** | ✅ Extracted | `scanner-git` |
+| **Runtime + Entrypoints** | ✅ Implemented | `gossip-orchestrator`, `gossip-scanner-runtime`, `gossip-worker`, `scanner-rs-cli` |
 
-- **Contracts and low-level infrastructure**: `gossip-contracts`, `gossip-frontier`, `gossip-stdx`
-- **Coordination**: `gossip-coordination`, `gossip-coordination-etcd`
-- **Connectors and orchestration**: `gossip-connectors`, `gossip-orchestrator`
-- **Persistence**: `gossip-persistence-inmemory`, `gossip-pg-common`, `gossip-done-ledger-postgres`, `gossip-findings-postgres`
-- **Scanning pipeline**: `scanner-engine`, `scanner-engine-integration-tests`, `scanner-git`, `scanner-scheduler`
-- **Runtime and entrypoints**: `gossip-scanner-runtime`, `gossip-worker`, `scanner-rs-cli`
-- **Tooling**: `tools/dev-seed`
+## Crate Responsibilities
 
-## How the Pieces Fit
-
-At a high level, the repository supports two execution styles:
-
-1. **Direct local scanning**: `scanner-rs-cli` calls into `gossip-scanner-runtime`, which validates inputs, builds the detection engine, and dispatches filesystem or Git scans locally.
-2. **Distributed scanning**: `gossip-orchestrator` normalizes requests and registers runs, coordination assigns shard leases, and `gossip-worker` binds the generic distributed runtime to the real etcd and PostgreSQL backends.
-
-That split is why the same repository contains both standalone CLI entrypoints and distributed worker composition code.
+- **`gossip-stdx`**: low-level shared data structures and utilities, including the unsafe-backed containers other crates rely on behind safe APIs
+- **`gossip-contracts`**: shared contracts and pure data models for identity, coordination, connector, and persistence boundaries
+- **`gossip-frontier`**: typed-key encoding, shard hints, and shard-builder logic
+- **`gossip-coordination`**: coordination protocol, in-memory reference backend, event surface, and deterministic simulation
+- **`gossip-coordination-etcd`**: etcd-backed coordination implementation
+- **`gossip-connectors`**: in-memory, filesystem, and git connector implementations
+- **`gossip-persistence-inmemory`**: in-memory reference persistence backends and persistence simulation support
+- **`gossip-done-ledger-postgres` / `gossip-findings-postgres` / `gossip-pg-common`**: PostgreSQL persistence implementations and shared DB support
+- **`scanner-engine`**: rule loading, content policy, scan engine, scratch memory, and performance-sensitive matching paths
+- **`scanner-scheduler`**: local filesystem scan runtime, archive handling, executor, and event surface
+- **`scanner-git`**: repository discovery/open, commit walk, tree diff, pack execution, finalize, and persist seams for Git scanning
+- **`gossip-orchestrator`**: request normalization plus initial shard geometry planning for filesystem and Git submission flows
+- **`gossip-scanner-runtime`**: runtime glue that builds engines, dispatches scans, translates results, commits receipts, and bridges distributed mode
+- **`gossip-worker`**: worker binary wiring runtime execution to etcd coordination and PostgreSQL persistence
+- **`scanner-rs-cli`**: standalone CLI binary routed through `gossip-scanner-runtime`
+- **`scanner-engine-integration-tests`**: cross-crate API contract coverage for the extracted scanning crates
 
 ## Cross-Boundary Data Flow
 
-The distributed path looks like this:
+Here is the common distributed path in the current workspace:
 
 ```mermaid
 sequenceDiagram
-    participant OR as Orchestrator / CLI
     participant CO as Coordination
-    participant WR as Worker Runtime
-    participant CN as Connector
+    participant WK as Worker
+    participant RT as Scanner Runtime
+    participant CN as Connector / Git Runtime
     participant SE as Scanner Engine
-    participant PE as Persistence
+    participant FS as FindingsSink
+    participant DL as DoneLedger
 
-    OR->>CO: create run + register initial shards
-    CO->>WR: lease shard with fence epoch
-    WR->>CN: enumerate keys within shard bounds
-    CN->>WR: ordered items and content
-    WR->>SE: scan content
-    SE->>WR: findings
-    WR->>PE: translate and commit findings / done-ledger records
-    WR->>CO: checkpoint, renew, split, or complete
+    CO->>WK: Acquire shard lease + restored state
+    WK->>RT: Execute assigned shard or repo work
+    RT->>CN: Enumerate page / execute repo scan
+    CN->>SE: Scan candidate content
+    SE-->>RT: Findings and scan results
+    RT->>FS: Persist findings durably
+    RT->>DL: Persist done-ledger completion
+    RT->>CO: Advance checkpoint after durable receipts
 ```
 
-A crucial detail is that shard assignment and item identity are different concerns:
-
-- coordination tracks byte-range ownership and cursor progress
-- identity derives stable item and finding IDs from the content model
-- persistence stores the durable result of completed work
+That flow is the architectural spine of the repository: boundary contracts define the durable vocabulary, implementation crates execute the work, and the runtime ties the pieces together.
 
 ## What's Next
 
-Now that you understand the overall structure, the next chapter explains how to read the guide and when to switch between conceptual and code-level sections:
+Now that you understand the overall architecture, let's look at how to read this guide effectively:
 
 **[→ Next: 04-how-to-read-this-guide.md](04-how-to-read-this-guide.md)**
 
@@ -229,4 +292,5 @@ Now that you understand the overall structure, the next chapter explains how to 
 ## References
 
 - Corbett, James C. et al. (2012). "Spanner: Google's Globally-Distributed Database." *OSDI 2012*.
+- Kleppmann, Martin (2016). "How to do distributed locking." *Blog post*.
 - Gray, Cary & David Cheriton (1989). "Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency." *SOSP 1989*.
