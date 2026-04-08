@@ -152,9 +152,9 @@ See **[→ Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)
 
 **Important distinction**:
 
-`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types, but they are still part of Boundary 5's execution-facing persistence surface in this guide. They adapt scan-loop callbacks into the persistence commit pipeline.
+`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types, while the distributed path uses the receipt-driven `distributed` module plus `commit_pipeline` and `checkpoint_aggregator` to turn scan results into durable findings, done-ledger writes, and checkpoint advancement.
 
-**Status**: 🔧 **Contracts and backends implemented; runtime composition continues to evolve**
+**Status**: ✅ **Fully implemented** across contracts, in-memory backends, PostgreSQL backends, and receipt-driven runtime adapters
 
 See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space.md)** for the persistence section.
 
@@ -166,7 +166,7 @@ See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space
 | **B2: Coordination** | Complete in-memory and etcd-backed protocol surface |
 | **B3: Shard Algebra** | Complete in `gossip-frontier` |
 | **B4: Connector** | Complete ordered-content contract plus in-memory/filesystem implementations; repo-native Git execution uses connector contracts and runtime code rather than a concrete `gossip-connectors` adapter |
-| **B5: Persistence** | Contract, in-memory, and PostgreSQL backends implemented; runtime wiring uses receipt-driven commit flow |
+| **B5: Persistence** | Complete contract, in-memory, PostgreSQL, and receipt-driven runtime composition |
 
 ## Mapping to Crate Structure
 
@@ -253,7 +253,11 @@ Two details matter:
 - identity and persistence are deterministic, so retries converge instead of multiplying state
 - coordination only advances progress after the durable path confirms what was actually committed
 
+<<<<<<< HEAD
 Git distributed runs use the separate repo-frontier worker loop in `gossip-scanner-runtime::distributed`: the worker hydrates a Git shard payload from `gossip-orchestrator`, executes the repository path through `scanner-git`, and only then finalizes shard progress through the durable receipt path.
+=======
+The Git repo-frontier path follows the same claim -> execute -> durable receipts -> advance shape, but it skips `gossip-connectors`: `gossip-scanner-runtime::distributed::run_git_repo_worker` syncs or opens the repo target, executes `GitRepoRuntime`, persists findings plus done-ledger state, and advances the shard only after those receipts land.
+>>>>>>> fe2c0f6 (docs(guide): sync 00 chapters [sec-00])
 
 ## What's Next
 
