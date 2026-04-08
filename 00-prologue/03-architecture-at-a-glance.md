@@ -75,7 +75,7 @@ See **[→ Boundary 1](../02-boundary-1-identity-spine/01-identity-problem-space
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Active: register_shard
+    [*] --> Active: register_shards
     Active --> Active: checkpoint / renew / split_residual
     Active --> Done: complete
     Active --> Split: split_replace
