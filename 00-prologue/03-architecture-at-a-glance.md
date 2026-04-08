@@ -130,10 +130,11 @@ See **[→ Boundary 3](../05-boundary-3-shard-algebra/01-the-translation-layer.m
 5. **Ordered-content implementations** in `gossip-connectors`: in-memory and filesystem connectors
 6. **Git contract implementations** in `gossip-scanner-runtime`: `StaticGitRepoDiscoverySource`, `LocalMirrorManager`, and `ScannerGitExecutor`
 7. **Conformance harness** through `run_ordered_content_conformance`
+8. **Git shard payload plumbing** in `gossip-orchestrator`, rather than a concrete Git connector in `gossip-connectors`
 
-**Status**: ✅ **Fully implemented** (10 contract files in `gossip-contracts/src/connector/`, 8 source files in `gossip-connectors/src/`, plus Git adapter implementations in `gossip-scanner-runtime/src/git_*.rs`)
+**Status**: ✅ **Fully implemented for the ordered-content surface** (10 contract files in `gossip-contracts/src/connector/`, 8 source files in `gossip-connectors/src/`, with repo-native Git execution living in `gossip-scanner-runtime`, `scanner-git`, and Git shard payload handling in `gossip-orchestrator`)
 
-**Code**: `crates/gossip-contracts/src/connector/`, `crates/gossip-connectors/`, and `crates/gossip-scanner-runtime/src/git_*.rs`
+**Code**: `crates/gossip-contracts/src/connector/`, `crates/gossip-connectors/`, the Git runtime bridge in `crates/gossip-scanner-runtime/`, and Git shard payload handling in `crates/gossip-orchestrator/`
 
 See **[→ Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)** for the connector section.
 
@@ -151,9 +152,9 @@ See **[→ Boundary 4](../06-boundary-4-connector/01-connector-problem-space.md)
 
 **Important distinction**:
 
-`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types, but they are still part of Boundary 5's execution-facing persistence surface in this guide. They adapt scan-loop callbacks into the persistence commit pipeline.
+`CommitSink` and `CliNoOpCommitSink` live in `gossip-scanner-runtime` as runtime bridge types, while the distributed path uses the receipt-driven `distributed` module plus `commit_pipeline` and `checkpoint_aggregator` to turn scan results into durable findings, done-ledger writes, and checkpoint advancement.
 
-**Status**: 🔧 **Contracts and backends implemented; runtime composition continues to evolve**
+**Status**: ✅ **Fully implemented** across contracts, in-memory backends, PostgreSQL backends, and receipt-driven runtime adapters
 
 See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space.md)** for the persistence section.
 
@@ -164,8 +165,8 @@ See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space
 | **B1: Identity** | Complete in `gossip-contracts/src/identity/` |
 | **B2: Coordination** | Complete in-memory and etcd-backed protocol surface |
 | **B3: Shard Algebra** | Complete in `gossip-frontier` |
-| **B4: Connector** | Complete contract surface; ordered-content implementations in `gossip-connectors`, Git adapters in `gossip-scanner-runtime` |
-| **B5: Persistence** | Contract, in-memory, and PostgreSQL backends implemented; runtime wiring uses receipt-driven commit flow |
+| **B4: Connector** | Complete ordered-content contract plus in-memory/filesystem implementations; repo-native Git execution uses connector contracts and runtime code rather than a concrete `gossip-connectors` adapter |
+| **B5: Persistence** | Complete contract, in-memory, PostgreSQL, and receipt-driven runtime composition |
 
 ## Mapping to Crate Structure
 
@@ -209,7 +210,7 @@ Integration and tooling
 - **`gossip-frontier`**: ordered-key encoding, shard hints, split arithmetic, and preallocated shard builders
 - **`gossip-coordination`**: coordination traits, state machine, in-memory reference backend, `WorkerSession`, and deterministic simulation harness
 - **`gossip-coordination-etcd`**: durable etcd-backed coordination backend
-- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared connector helpers
+- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared support utilities such as the streaming split estimator
 - **`gossip-persistence-inmemory`**: reference in-memory done-ledger and findings-sink backends
 - **`gossip-pg-common`**: shared PostgreSQL helpers, migrations, and test-support utilities
 - **`gossip-done-ledger-postgres`**: PostgreSQL done-ledger backend
@@ -218,7 +219,7 @@ Integration and tooling
 - **`scanner-scheduler`**: filesystem scan scheduling, archive handling, and execution primitives
 - **`scanner-git`**: Git repository scanning pipeline
 - **`gossip-orchestrator`**: request normalization, initial shard planning, shard payload encoding, and run setup
-- **`gossip-scanner-runtime`**: direct and distributed runtime composition across connectors, coordination, orchestration, and scanner crates, plus Git discovery/mirror/executor adapters
+- **`gossip-scanner-runtime`**: direct and distributed runtime composition across filesystem connectors, Git repo-frontier execution, coordination, orchestration, and scanner crates, including the concrete Git discovery, mirror, and executor adapters
 - **`gossip-worker`**: worker binary that can launch local scans or the production distributed path
 - **`scanner-rs-cli`**: standalone CLI binary for direct scanning
 - **`dev-seed`**: local developer tool for seeding filesystem runs, applying PostgreSQL migrations, and inspecting persistence row counts
@@ -254,7 +255,7 @@ Two details matter:
 - identity and persistence are deterministic, so retries converge instead of multiplying state
 - coordination only advances progress after the durable path confirms what was actually committed
 
-The Git repo-frontier worker keeps the same create/claim/durable-write skeleton, but replaces the ordered connector step with `git_discovery` plus `git_mirror` and replaces the filesystem scan step with `git_executor` plus `scanner-git`.
+Git distributed runs use the separate repo-frontier worker loop in `gossip-scanner-runtime::distributed`: the worker hydrates a Git shard payload from `gossip-orchestrator`, executes the repository path through `scanner-git`, and only then finalizes shard progress through the durable receipt path.
 
 ## What's Next
 
