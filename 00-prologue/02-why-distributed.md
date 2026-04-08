@@ -47,7 +47,7 @@ The current system does **not** partition all work with one universal shard shap
 
 Instead, it has two partitioning families:
 
-- **Filesystem ordered-content shards** use half-open key ranges stored in `ShardSpec`, durable progress in `Cursor`, and `gossip-frontier` encodings such as `KeyEncoding`, `PathKey`, and `ManifestRowKey`
+- **Filesystem ordered-content shards** use half-open key ranges stored in `ShardSpec`, durable progress in `CursorUpdate`, and `gossip-frontier` encodings such as `KeyEncoding`, `PathKey`, and `ManifestRowKey`
 - **Git repo-frontier shards** start as exact singleton shards: one normalized repo target per startup shard, later claimed and executed by `run_git_repo_worker`
 
 For filesystem work, a run eventually looks like ordered keyspace ownership:
@@ -131,7 +131,7 @@ Distribution is not a flourish. It is the mechanism that makes the current archi
 |------------|------------------|-------------------|
 | **Scale** | Scan execution, Git history traversal, and durability must progress independently | Separate runtime crates and worker paths |
 | **Failure Isolation** | One bad shard or connector path should not stop the rest of the run | Lease-based coordination, shard parking, and isolated worker execution |
-| **Work Partitioning** | Workers need resumable ownership of filesystem key ranges and exact ownership of Git repo targets | Filesystem: `ShardSpec` + `Cursor` + `gossip-frontier`; Git: singleton repo-frontier shards |
+| **Work Partitioning** | Workers need resumable ownership of filesystem key ranges and exact ownership of Git repo targets | Filesystem: `ShardSpec` + `CursorUpdate` + `gossip-frontier`; Git: singleton repo-frontier shards |
 | **Exactly-Once** | Crashes and retries are inevitable | Op-log idempotency + idempotent persistence + receipt-driven checkpointing |
 
 ## The Coordination Layer
