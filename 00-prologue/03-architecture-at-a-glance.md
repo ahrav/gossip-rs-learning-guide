@@ -127,10 +127,10 @@ See **[→ Boundary 3](../05-boundary-3-shard-algebra/01-the-translation-layer.m
 2. **Ordered-content contract** for page-based enumerators with resumable cursors
 3. **Git-specific contract pieces** for repository-native execution
 4. **Error classification** through `ErrorClass`
-5. **Concrete implementations** in `gossip-connectors`: in-memory, filesystem, and Git connectors
+5. **Concrete implementations** in `gossip-connectors`: in-memory and filesystem ordered-content connectors, while Git repository execution lives in `scanner-git` and `gossip-scanner-runtime`
 6. **Conformance harness** through `run_ordered_content_conformance`
 
-**Status**: ✅ **Fully implemented** (10 contract files in `gossip-contracts/src/connector/`, 10 source files in `gossip-connectors/src/`)
+**Status**: ✅ **Fully implemented** contract surface plus in-memory/filesystem connector implementations, with Git execution routed through the runtime and `scanner-git` crates
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -163,7 +163,7 @@ See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space
 | **B1: Identity** | Complete in `gossip-contracts/src/identity/` |
 | **B2: Coordination** | Complete in-memory and etcd-backed protocol surface |
 | **B3: Shard Algebra** | Complete in `gossip-frontier` |
-| **B4: Connector** | Complete contract + in-memory/filesystem/Git implementations |
+| **B4: Connector** | Complete contract surface plus in-memory/filesystem implementations; Git execution composes `scanner-git` through `gossip-scanner-runtime` |
 | **B5: Persistence** | Contract, in-memory, and PostgreSQL backends implemented; runtime wiring uses receipt-driven commit flow |
 
 ## Mapping to Crate Structure
@@ -205,7 +205,7 @@ Binaries and integration crates
 - **`gossip-frontier`**: ordered-key encoding, shard hints, split arithmetic, and preallocated shard builders
 - **`gossip-coordination`**: coordination traits, state machine, in-memory reference backend, `WorkerSession`, and deterministic simulation harness
 - **`gossip-coordination-etcd`**: durable etcd-backed coordination backend
-- **`gossip-connectors`**: in-memory, filesystem, and Git connectors plus adapter code used by runtime paths
+- **`gossip-connectors`**: in-memory and filesystem connector implementations, shared path/IO helpers, and split-estimator utilities used by runtime paths
 - **`gossip-persistence-inmemory`**: reference in-memory done-ledger and findings-sink backends
 - **`gossip-pg-common`**: shared PostgreSQL helpers, migrations, and test-support utilities
 - **`gossip-done-ledger-postgres`**: PostgreSQL done-ledger backend

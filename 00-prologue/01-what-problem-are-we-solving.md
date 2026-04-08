@@ -72,7 +72,7 @@ SecretHash_A != SecretHash_B
 FindingId_A != FindingId_B
 ```
 
-Only `SecretHash` uses BLAKE3 keyed mode. The later identities use derive-key mode over explicit tenant-scoped inputs such as `TenantId`, `StableItemId`, `RuleFingerprint`, `PolicyHash`, and `OccurrenceId`.
+Only `SecretHash` uses BLAKE3 keyed mode. The later identities use derive-key mode over explicit typed inputs such as `TenantId`, `StableItemId`, `RuleFingerprint`, `PolicyHash`, and `OccurrenceId`.
 
 ## The Exactly-Once Problem
 
