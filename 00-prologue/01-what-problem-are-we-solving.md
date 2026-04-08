@@ -72,7 +72,7 @@ SecretHash_A != SecretHash_B
 FindingId_A != FindingId_B
 ```
 
-Only `SecretHash` uses BLAKE3 keyed mode. The later identities use derive-key mode over explicit tenant-scoped inputs such as `TenantId`, `StableItemId`, `RuleFingerprint`, `PolicyHash`, and `OccurrenceId`.
+Only `SecretHash` uses BLAKE3 keyed mode. The later identities use derive-key mode over explicit typed inputs such as `TenantId`, `StableItemId`, `RuleFingerprint`, `PolicyHash`, and `OccurrenceId`.
 
 ## The Exactly-Once Problem
 
@@ -110,7 +110,7 @@ graph LR
     subgraph Worker
         WR[gossip-worker]
         RT[gossip-scanner-runtime]
-        CN[gossip-connectors]
+        CN[gossip-connectors<br/>(filesystem path)]
         EN[scanner-engine / scanner-git / scanner-scheduler]
     end
 
@@ -125,11 +125,14 @@ graph LR
     CO --> WR
     WR --> RT
     RT --> CN
-    RT --> EN
+    RT --> OC
+    RT --> GT
     RT --> DL
     RT --> FI
     RT --> CO
 ```
+
+The connector box applies to the filesystem ordered-content path. Git repo-frontier work goes from `gossip-scanner-runtime` into `scanner-git` plus Git-specific shard payloads from `gossip-orchestrator`, not through a concrete Git connector implementation in `gossip-connectors`.
 
 ### Component Roles
 
@@ -146,12 +149,12 @@ graph LR
 
 **Worker runtime**:
 - Claims leases
-- Executes the filesystem ordered-content path or the Git repo-frontier path
+- Executes the filesystem ordered-content path through `gossip-connectors`, or the separate Git repo-frontier path through `scanner-git`
 - Translates scan results into durable persistence writes
 - Advances checkpoints only after durable receipts exist
 
 **Persistence backends**:
-- `DoneLedger` tracks whether a `(tenant, policy, object-version identity)` has already been durably processed
+- `DoneLedger` tracks whether a `(tenant, policy_hash, ovid_hash)` scope has already been durably processed
 - `FindingsSink` stores stable findings, versioned occurrences, and policy/run-scoped observations
 
 ## Why This Is Hard
