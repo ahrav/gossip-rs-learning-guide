@@ -253,11 +253,7 @@ Two details matter:
 - identity and persistence are deterministic, so retries converge instead of multiplying state
 - coordination only advances progress after the durable path confirms what was actually committed
 
-<<<<<<< HEAD
 Git distributed runs use the separate repo-frontier worker loop in `gossip-scanner-runtime::distributed`: the worker hydrates a Git shard payload from `gossip-orchestrator`, executes the repository path through `scanner-git`, and only then finalizes shard progress through the durable receipt path.
-=======
-The Git repo-frontier path follows the same claim -> execute -> durable receipts -> advance shape, but it skips `gossip-connectors`: `gossip-scanner-runtime::distributed::run_git_repo_worker` syncs or opens the repo target, executes `GitRepoRuntime`, persists findings plus done-ledger state, and advances the shard only after those receipts land.
->>>>>>> fe2c0f6 (docs(guide): sync 00 chapters [sec-00])
 
 ## What's Next
 
