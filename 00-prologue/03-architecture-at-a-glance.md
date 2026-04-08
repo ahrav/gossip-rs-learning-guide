@@ -165,8 +165,8 @@ See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space
 | **B1: Identity** | Complete in `gossip-contracts/src/identity/` |
 | **B2: Coordination** | Complete in-memory and etcd-backed protocol surface |
 | **B3: Shard Algebra** | Complete in `gossip-frontier` |
-| **B4: Connector** | Complete ordered-content contract plus in-memory/filesystem implementations; repo-native Git execution uses connector contracts and runtime code rather than a concrete `gossip-connectors` adapter |
-| **B5: Persistence** | Complete contract, in-memory, PostgreSQL, and receipt-driven runtime composition |
+| **B4: Connector** | Complete contract surface plus in-memory/filesystem implementations; Git runtime adapters live in `gossip-scanner-runtime` and `scanner-git` |
+| **B5: Persistence** | Contract, in-memory, and PostgreSQL backends implemented; runtime wiring uses receipt-driven commit flow |
 
 ## Mapping to Crate Structure
 
@@ -210,7 +210,7 @@ Integration and tooling
 - **`gossip-frontier`**: ordered-key encoding, shard hints, split arithmetic, and preallocated shard builders
 - **`gossip-coordination`**: coordination traits, state machine, in-memory reference backend, `WorkerSession`, and deterministic simulation harness
 - **`gossip-coordination-etcd`**: durable etcd-backed coordination backend
-- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared support utilities such as the streaming split estimator
+- **`gossip-connectors`**: in-memory and filesystem connectors plus shared split-estimation/path helpers used by runtime paths
 - **`gossip-persistence-inmemory`**: reference in-memory done-ledger and findings-sink backends
 - **`gossip-pg-common`**: shared PostgreSQL helpers, migrations, and test-support utilities
 - **`gossip-done-ledger-postgres`**: PostgreSQL done-ledger backend
@@ -226,7 +226,7 @@ Integration and tooling
 
 ## Cross-Boundary Data Flow
 
-A distributed filesystem shard now looks roughly like this:
+A distributed filesystem lease now looks roughly like this. Git repo-frontier leases replace the ordered-connector hop with `git_repo` / `scanner-git` execution but keep the same receipt-gated persistence ordering.
 
 ```mermaid
 sequenceDiagram
@@ -234,7 +234,7 @@ sequenceDiagram
     participant CO as Coordination
     participant WR as Worker Runtime
     participant CN as Ordered Connector
-    participant EN as scanner-engine / scanner-scheduler
+    participant EN as Scanner Engine
     participant FI as FindingsSink
     participant DL as DoneLedger
 
