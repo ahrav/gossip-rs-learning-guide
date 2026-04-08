@@ -127,10 +127,11 @@ See **[→ Boundary 3](../05-boundary-3-shard-algebra/01-the-translation-layer.m
 2. **Ordered-content contract** for page-based enumerators with resumable cursors
 3. **Git-specific contract pieces** for repository-native execution
 4. **Error classification** through `ErrorClass`
-5. **Concrete implementations** in `gossip-connectors`: in-memory and filesystem ordered-content connectors, while Git repository execution lives in `scanner-git` and `gossip-scanner-runtime`
-6. **Conformance harness** through `run_ordered_content_conformance`
+5. **Concrete ordered-content implementations** in `gossip-connectors`: in-memory and filesystem connectors
+6. **Git-specific discovery and execution composition** through `gossip_contracts::connector::git`, `gossip-scanner-runtime`, and `scanner-git`
+7. **Conformance harness** through `run_ordered_content_conformance`
 
-**Status**: ✅ **Fully implemented** contract surface plus in-memory/filesystem connector implementations, with Git execution routed through the runtime and `scanner-git` crates
+**Status**: ✅ **Fully implemented** (10 contract files in `gossip-contracts/src/connector/`, 8 source files in `gossip-connectors/src/`, with Git repo execution living in `gossip-scanner-runtime` and `scanner-git`)
 
 **Code**: `crates/gossip-contracts/src/connector/` and `crates/gossip-connectors/`
 
@@ -163,7 +164,7 @@ See **[→ Boundary 5](../07-boundary-5-persistence/01-persistence-problem-space
 | **B1: Identity** | Complete in `gossip-contracts/src/identity/` |
 | **B2: Coordination** | Complete in-memory and etcd-backed protocol surface |
 | **B3: Shard Algebra** | Complete in `gossip-frontier` |
-| **B4: Connector** | Complete contract surface plus in-memory/filesystem implementations; Git execution composes `scanner-git` through `gossip-scanner-runtime` |
+| **B4: Connector** | Complete contract surface + in-memory/filesystem ordered-content implementations + repo-native Git execution path |
 | **B5: Persistence** | Contract, in-memory, and PostgreSQL backends implemented; runtime wiring uses receipt-driven commit flow |
 
 ## Mapping to Crate Structure
@@ -192,10 +193,11 @@ Scanner and orchestration
   gossip-orchestrator
   gossip-scanner-runtime
 
-Binaries and integration crates
+Binaries, integration, and tooling crates
   gossip-worker
   scanner-rs-cli
   scanner-engine-integration-tests
+  tools/dev-seed
 ```
 
 ### Crate Responsibilities
@@ -205,7 +207,7 @@ Binaries and integration crates
 - **`gossip-frontier`**: ordered-key encoding, shard hints, split arithmetic, and preallocated shard builders
 - **`gossip-coordination`**: coordination traits, state machine, in-memory reference backend, `WorkerSession`, and deterministic simulation harness
 - **`gossip-coordination-etcd`**: durable etcd-backed coordination backend
-- **`gossip-connectors`**: in-memory and filesystem connector implementations, shared path/IO helpers, and split-estimator utilities used by runtime paths
+- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared support utilities such as the streaming split estimator
 - **`gossip-persistence-inmemory`**: reference in-memory done-ledger and findings-sink backends
 - **`gossip-pg-common`**: shared PostgreSQL helpers, migrations, and test-support utilities
 - **`gossip-done-ledger-postgres`**: PostgreSQL done-ledger backend
@@ -217,6 +219,7 @@ Binaries and integration crates
 - **`gossip-scanner-runtime`**: direct and distributed runtime composition across connectors, coordination, orchestration, and scanner crates
 - **`gossip-worker`**: worker binary that can launch local scans or the production distributed path
 - **`scanner-rs-cli`**: standalone CLI binary for direct scanning
+- **`tools/dev-seed`**: local developer tool for seeding filesystem runs, applying PostgreSQL migrations, and inspecting persistence row counts
 
 ## Cross-Boundary Data Flow
 
