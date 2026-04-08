@@ -50,7 +50,7 @@ Instead, it partitions **ordered connector keyspaces**.
 The pieces are:
 
 - `ShardSpec`: a half-open key range `[start, end)` stored by the coordination layer
-- `Cursor`: durable progress within that range
+- `CursorUpdate`: durable progress within that range
 - `KeyEncoding`: the `gossip-frontier` contract that turns typed keys into byte strings whose lexicographic order matches logical order
 - `PathKey` and `ManifestRowKey`: concrete key types used by the current shard-algebra layer
 

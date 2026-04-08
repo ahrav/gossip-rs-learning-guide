@@ -75,7 +75,7 @@ See **[→ Boundary 1](../02-boundary-1-identity-spine/01-identity-problem-space
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Active: register_shard
+    [*] --> Active: register_shards
     Active --> Active: checkpoint / renew / split_residual
     Active --> Done: complete
     Active --> Split: split_replace
@@ -193,11 +193,13 @@ Scanner and orchestration
   gossip-orchestrator
   gossip-scanner-runtime
 
-Binaries, integration, and tooling crates
+Binaries
   gossip-worker
   scanner-rs-cli
+
+Integration and tooling
   scanner-engine-integration-tests
-  tools/dev-seed
+  dev-seed
 ```
 
 ### Crate Responsibilities
@@ -207,7 +209,7 @@ Binaries, integration, and tooling crates
 - **`gossip-frontier`**: ordered-key encoding, shard hints, split arithmetic, and preallocated shard builders
 - **`gossip-coordination`**: coordination traits, state machine, in-memory reference backend, `WorkerSession`, and deterministic simulation harness
 - **`gossip-coordination-etcd`**: durable etcd-backed coordination backend
-- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared support utilities such as the streaming split estimator
+- **`gossip-connectors`**: in-memory and filesystem ordered-content connectors plus shared adapter and split-estimation code
 - **`gossip-persistence-inmemory`**: reference in-memory done-ledger and findings-sink backends
 - **`gossip-pg-common`**: shared PostgreSQL helpers, migrations, and test-support utilities
 - **`gossip-done-ledger-postgres`**: PostgreSQL done-ledger backend
@@ -219,6 +221,7 @@ Binaries, integration, and tooling crates
 - **`gossip-scanner-runtime`**: direct and distributed runtime composition across connectors, coordination, orchestration, and scanner crates
 - **`gossip-worker`**: worker binary that can launch local scans or the production distributed path
 - **`scanner-rs-cli`**: standalone CLI binary for direct scanning
+- **`dev-seed`**: local developer tool for seeding filesystem runs, applying PostgreSQL migrations, and inspecting persistence row counts
 - **`tools/dev-seed`**: local developer tool for seeding filesystem runs, applying PostgreSQL migrations, and inspecting persistence row counts
 
 ## Cross-Boundary Data Flow
