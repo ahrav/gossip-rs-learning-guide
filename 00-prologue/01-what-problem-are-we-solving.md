@@ -111,7 +111,8 @@ graph LR
         WR[gossip-worker]
         RT[gossip-scanner-runtime]
         CN[gossip-connectors]
-        EN[scanner-engine / scanner-git / scanner-scheduler]
+        OC[scanner-engine / scanner-scheduler]
+        GT[git_discovery / git_mirror / git_executor / scanner-git]
     end
 
     subgraph Storage
@@ -125,7 +126,8 @@ graph LR
     CO --> WR
     WR --> RT
     RT --> CN
-    RT --> EN
+    RT --> OC
+    RT --> GT
     RT --> DL
     RT --> FI
     RT --> CO
@@ -146,12 +148,13 @@ graph LR
 
 **Worker runtime**:
 - Claims leases
-- Executes the filesystem ordered-content path or the Git repo-frontier path
+- Executes the filesystem ordered-content path through `gossip-connectors`, `scanner-engine`, and `scanner-scheduler`
+- Executes the Git repo-frontier path through `git_discovery`, `git_mirror`, `git_executor`, and `scanner-git`
 - Translates scan results into durable persistence writes
 - Advances checkpoints only after durable receipts exist
 
 **Persistence backends**:
-- `DoneLedger` tracks whether a `(tenant, policy, object-version identity)` has already been durably processed
+- `DoneLedger` tracks whether a `(tenant, policy_hash, ovid_hash)` scope has already been durably processed
 - `FindingsSink` stores stable findings, versioned occurrences, and policy/run-scoped observations
 
 ## Why This Is Hard
