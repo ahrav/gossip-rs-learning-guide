@@ -110,7 +110,7 @@ graph LR
     subgraph Worker
         WR[gossip-worker]
         RT[gossip-scanner-runtime]
-        CN[gossip-connectors]
+        CN[gossip-connectors<br/>(filesystem path)]
         EN[scanner-engine / scanner-git / scanner-scheduler]
     end
 
@@ -131,6 +131,8 @@ graph LR
     RT --> CO
 ```
 
+The connector box applies to the filesystem ordered-content path. Git repo-frontier work goes from `gossip-scanner-runtime` into `scanner-git` plus Git-specific shard payloads from `gossip-orchestrator`, not through a concrete Git connector implementation in `gossip-connectors`.
+
 ### Component Roles
 
 **Orchestrator**:
@@ -146,7 +148,7 @@ graph LR
 
 **Worker runtime**:
 - Claims leases
-- Executes the filesystem ordered-content path or the Git repo-frontier path
+- Executes the filesystem ordered-content path through `gossip-connectors`, or the separate Git repo-frontier path through `scanner-git`
 - Translates scan results into durable persistence writes
 - Advances checkpoints only after durable receipts exist
 

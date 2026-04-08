@@ -43,18 +43,14 @@ That means one failure does not have to become a global stop-the-world event.
 
 ## Constraint 3: Work Partitioning
 
-The current system does **not** partition work by hashing `StableItemId` into a giant 256-bit bucket space.
+The current system does **not** partition all work with one universal shard shape.
 
-Instead, it partitions **ordered connector keyspaces**.
+Instead, it has two partitioning families:
 
-The pieces are:
+- **Filesystem ordered-content shards** use half-open key ranges stored in `ShardSpec`, durable progress in `Cursor`, and `gossip-frontier` encodings such as `KeyEncoding`, `PathKey`, and `ManifestRowKey`
+- **Git repo-frontier shards** start as exact singleton shards: one normalized repo target per startup shard, later claimed and executed by `run_git_repo_worker`
 
-- `ShardSpec`: a half-open key range `[start, end)` stored by the coordination layer
-- `Cursor`: durable progress within that range
-- `KeyEncoding`: the `gossip-frontier` contract that turns typed keys into byte strings whose lexicographic order matches logical order
-- `PathKey` and `ManifestRowKey`: concrete key types used by the current shard-algebra layer
-
-Conceptually, a run looks more like this:
+For filesystem work, a run eventually looks like ordered keyspace ownership:
 
 ```text
 Shard A: [apps/, infra/)
@@ -62,24 +58,26 @@ Shard B: [infra/, services/)
 Shard C: [services/, end)
 ```
 
-or, for manifest-style startup plans:
+The current startup planner does **not** pre-split filesystem requests into manifest-row ranges. It emits one full-range shard per normalized filesystem request, and later split flows carve that space into smaller ordered ranges when needed.
+
+For Git work, startup sharding is exact-key ownership:
 
 ```text
-Shard A: [manifest 7 row 0, manifest 7 row 1000)
-Shard B: [manifest 7 row 1000, manifest 7 row 2000)
+Shard A: [repo-key-a, repo-key-a\0)
+Shard B: [repo-key-b, repo-key-b\0)
 ```
 
-This matters because workers do not ask "does this hash fall in my bucket?" They ask "is this ordered key still inside my shard range, and where should my cursor resume?"
+This matters because a filesystem worker asks "is this ordered key still inside my shard range, and where should my cursor resume?", while a Git worker asks "which exact repo target does this singleton shard own, and has its durable finalize step completed?"
 
 ### Why Range-Based Sharding?
 
-Range-based shards are a good fit for the implementation that exists today:
+Range-based shards are a good fit for the filesystem path that exists today:
 
 1. **Ordered enumeration**: connectors already expose ordered pages and resumable cursors
 2. **Cheap splitting**: `gossip-frontier` can compute successor keys and split boundaries without rehashing the world
 3. **Coverage checks**: half-open ranges make it possible to reason about gaps, overlaps, and split correctness
 
-That is why `gossip-frontier` exists as its own boundary instead of burying shard math inside one connector.
+That is why `gossip-frontier` exists as its own boundary instead of burying shard math inside one connector. Git uses the same coordination substrate, but its startup planner currently emits exact singleton repo-frontier shards rather than resumable ordered-content ranges.
 
 ## Constraint 4: Exactly-Once Processing
 
@@ -133,7 +131,7 @@ Distribution is not a flourish. It is the mechanism that makes the current archi
 |------------|------------------|-------------------|
 | **Scale** | Scan execution, Git history traversal, and durability must progress independently | Separate runtime crates and worker paths |
 | **Failure Isolation** | One bad shard or connector path should not stop the rest of the run | Lease-based coordination, shard parking, and isolated worker execution |
-| **Work Partitioning** | Workers need resumable, splittable ownership of ordered work | `ShardSpec` + `Cursor` + `gossip-frontier` key encoding |
+| **Work Partitioning** | Workers need resumable ownership of filesystem key ranges and exact ownership of Git repo targets | Filesystem: `ShardSpec` + `Cursor` + `gossip-frontier`; Git: singleton repo-frontier shards |
 | **Exactly-Once** | Crashes and retries are inevitable | Op-log idempotency + idempotent persistence + receipt-driven checkpointing |
 
 ## The Coordination Layer
