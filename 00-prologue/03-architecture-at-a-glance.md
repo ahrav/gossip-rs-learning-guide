@@ -223,7 +223,7 @@ Binaries, integration, and tooling crates
 
 ## Cross-Boundary Data Flow
 
-A distributed run now looks roughly like this:
+The sequence below is the filesystem distributed path. Git repo-frontier workers replace the connector stage with mirror sync plus `GitRepoRuntime::execute_repo`.
 
 ```mermaid
 sequenceDiagram
