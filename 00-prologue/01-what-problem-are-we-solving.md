@@ -111,7 +111,8 @@ graph LR
         WR[gossip-worker]
         RT[gossip-scanner-runtime]
         CN[gossip-connectors<br/>(filesystem path)]
-        EN[scanner-engine / scanner-git / scanner-scheduler]
+        OC[scanner-engine / scanner-scheduler<br/>(ordered-content path)]
+        GT[scanner-git<br/>(repo-frontier path)]
     end
 
     subgraph Storage
