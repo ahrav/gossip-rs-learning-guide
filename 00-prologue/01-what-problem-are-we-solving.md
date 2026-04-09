@@ -155,7 +155,7 @@ The connector box applies to the filesystem ordered-content path. Git repo-front
 - Advances checkpoints only after durable receipts exist
 
 **Persistence backends**:
-- `DoneLedger` tracks whether a `(tenant, policy_hash, ovid_hash)` scope has already been durably processed
+- `DoneLedger` tracks whether a `(tenant, policy_hash, ovid_hash)` (object-version identity hash) scope has already been durably processed
 - `FindingsSink` stores stable findings, versioned occurrences, and policy/run-scoped observations
 
 ## Why This Is Hard
